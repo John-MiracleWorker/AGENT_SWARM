@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent Swarm — Multi-Agent Coding Platform</title>
+    <meta name="description"
+        content="A real-time collaborative coding platform where multiple AI agents work together powered by Gemini 3 Pro.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+
+<body>
+    <!-- Mission Control Bar (Top) -->
+    <header id="mission-control">
+        <div class="mc-brand">
+            <div class="mc-logo">
+                <span class="logo-icon">🐝</span>
+                <h1>Agent Swarm</h1>
+            </div>
+            <div class="mc-badge">Gemini 3 Pro</div>
+        </div>
+
+        <div class="mc-mission" id="mission-area">
+            <!-- Before mission start -->
+            <div class="mc-setup" id="mission-setup">
+                <div class="mc-input-group">
+                    <button class="btn-folder" id="btn-folder-picker" title="Select workspace folder">
+                        📁 <span id="folder-label">Select Folder</span>
+                    </button>
+                    <input type="text" id="goal-input" placeholder="Describe your mission goal..."
+                        class="mc-goal-input">
+                    <button class="btn-launch" id="btn-launch" disabled>
+                        <span class="launch-icon">🚀</span> Launch Mission
+                    </button>
+                </div>
+            </div>
+            <!-- After mission start -->
+            <div class="mc-active hidden" id="mission-active">
+                <div class="mc-goal-display">
+                    <span class="goal-label">MISSION</span>
+                    <span class="goal-text" id="active-goal-text"></span>
+                </div>
+                <div class="mc-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <span class="progress-text" id="progress-text">0/0 tasks</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="mc-controls">
+            <div class="mc-token-display" id="token-display">
+                <span class="token-label">Tokens</span>
+                <span class="token-count" id="token-count">0</span>
+                <span class="token-cost" id="token-cost">$0.00</span>
+            </div>
+            <div class="mc-buttons hidden" id="mission-buttons">
+                <button class="btn-control btn-sync" id="btn-git-sync" title="Sync to Git (commit & push)">🔄
+                    Sync</button>
+                <button class="btn-control btn-pause" id="btn-pause" title="Pause">⏸️</button>
+                <button class="btn-control btn-resume hidden" id="btn-resume" title="Resume">▶️</button>
+                <button class="btn-control btn-stop" id="btn-stop" title="Stop">⏹️</button>
+            </div>
+            <div class="ws-indicator" id="ws-indicator" title="WebSocket disconnected">
+                <span class="ws-dot"></span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main id="main-content">
+        <!-- Left Panel: Agent Status -->
+        <aside id="agents-panel" class="panel">
+            <div class="panel-header">
+                <h2>Agents</h2>
+                <span class="agent-count" id="agent-count">0</span>
+            </div>
+            <div class="panel-body" id="agents-list">
+                <div class="agents-empty">
+                    <p>Launch a mission to deploy agents</p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Center Panel: Communication Feed -->
+        <section id="chat-panel" class="panel">
+            <div class="panel-header">
+                <h2>Communication Feed</h2>
+                <div class="chat-filters">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="chat">Chat</button>
+                    <button class="filter-btn" data-filter="code">Code</button>
+                    <button class="filter-btn" data-filter="review">Reviews</button>
+                </div>
+            </div>
+            <div class="panel-body" id="chat-messages">
+                <div class="chat-welcome">
+                    <div class="welcome-icon">🐝</div>
+                    <h3>Welcome to Agent Swarm</h3>
+                    <p>Select a workspace folder, describe your goal, and launch a mission.<br>Watch as AI agents
+                        collaborate to build your project in real-time.</p>
+                </div>
+            </div>
+            <div class="chat-input-area" id="chat-input-area">
+                <input type="text" id="user-message-input" placeholder="Send a message to agents..." class="user-input"
+                    disabled>
+                <button class="btn-send" id="btn-send" disabled>Send</button>
+            </div>
+        </section>
+
+        <!-- Right Panel: Code Viewer -->
+        <aside id="code-panel" class="panel">
+            <div class="panel-header">
+                <h2>Workspace</h2>
+                <button class="btn-refresh" id="btn-refresh-files" title="Refresh">🔄</button>
+            </div>
+            <div class="panel-body code-panel-body">
+                <div class="file-tree" id="file-tree">
+                    <div class="tree-empty">No workspace selected</div>
+                </div>
+                <div class="code-viewer" id="code-viewer">
+                    <div class="code-empty">
+                        <p>Select a file to view</p>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- Bottom Panel: Terminal + Tasks -->
+    <footer id="bottom-panels">
+        <div class="bottom-tabs">
+            <button class="bottom-tab active" data-panel="terminal-panel">🖥️ Terminal</button>
+            <button class="bottom-tab" data-panel="tasks-panel">📋 Tasks</button>
+        </div>
+
+        <div class="bottom-content">
+            <!-- Terminal Panel -->
+            <div class="bottom-panel active" id="terminal-panel">
+                <div class="terminal-output" id="terminal-output">
+                    <div class="terminal-line terminal-system">Agent Swarm Terminal — Ready</div>
+                </div>
+            </div>
+
+            <!-- Tasks Panel -->
+            <div class="bottom-panel" id="tasks-panel">
+                <div class="kanban-board" id="kanban-board">
+                    <div class="kanban-column" data-status="todo">
+                        <div class="kanban-header">📝 To Do <span class="kanban-count" id="count-todo">0</span></div>
+                        <div class="kanban-cards" id="cards-todo"></div>
+                    </div>
+                    <div class="kanban-column" data-status="in_progress">
+                        <div class="kanban-header">🔨 In Progress <span class="kanban-count"
+                                id="count-in_progress">0</span></div>
+                        <div class="kanban-cards" id="cards-in_progress"></div>
+                    </div>
+                    <div class="kanban-column" data-status="in_review">
+                        <div class="kanban-header">🔍 In Review <span class="kanban-count" id="count-in_review">0</span>
+                        </div>
+                        <div class="kanban-cards" id="cards-in_review"></div>
+                    </div>
+                    <div class="kanban-column" data-status="done">
+                        <div class="kanban-header">✅ Done <span class="kanban-count" id="count-done">0</span></div>
+                        <div class="kanban-cards" id="cards-done"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Folder Picker Modal -->
+    <div class="modal-overlay hidden" id="folder-picker-modal">
+        <div class="modal glass-panel">
+            <div class="modal-header">
+                <h3>📁 Select Workspace Folder</h3>
+                <button class="modal-close" id="modal-close">✕</button>
+            </div>
+            <div class="modal-path" id="modal-current-path">/</div>
+            <div class="modal-body" id="folder-list">
+                <div class="loading-spinner"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-select-folder" id="btn-select-folder">Select This Folder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/js/websocket.js"></script>
+    <script src="/static/js/agents-panel.js"></script>
+    <script src="/static/js/chat-panel.js"></script>
+    <script src="/static/js/code-panel.js"></script>
+    <script src="/static/js/task-panel.js"></script>
+    <script src="/static/js/terminal-panel.js"></script>
+    <script src="/static/js/folder-picker.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+
+</html>

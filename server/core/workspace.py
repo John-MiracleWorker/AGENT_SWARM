@@ -1,0 +1,206 @@
+"""
+Workspace Manager — Shared file workspace with locking and diff tracking.
+Agents operate in a user-selected directory with path validation.
+"""
+
+import asyncio
+import os
+import difflib
+import logging
+from pathlib import Path
+from typing import Optional
+
+import aiofiles
+
+logger = logging.getLogger(__name__)
+
+
+class WorkspaceManager:
+    """
+    Manages the shared file workspace. All file operations are
+    path-validated and locked to prevent concurrent write conflicts.
+    """
+
+    def __init__(self):
+        self._root: Optional[Path] = None
+        self._file_locks: dict[str, asyncio.Lock] = {}
+        self._lock = asyncio.Lock()
+        self._file_versions: dict[str, str] = {}  # path -> last content for diff
+
+    def set_root(self, path: str):
+        """Set the root working directory for this mission."""
+        root = Path(path).resolve()
+        if not root.exists():
+            root.mkdir(parents=True, exist_ok=True)
+        if not root.is_dir():
+            raise ValueError(f"Path is not a directory: {path}")
+        self._root = root
+        logger.info(f"Workspace root set to: {root}")
+
+    @property
+    def root(self) -> Path:
+        if not self._root:
+            raise RuntimeError("Workspace root not set. Call set_root() first.")
+        return self._root
+
+    def _validate_path(self, rel_path: str) -> Path:
+        """Validate a path is within the workspace root."""
+        full = (self.root / rel_path).resolve()
+        if not str(full).startswith(str(self.root)):
+            raise ValueError(f"Path escapes workspace: {rel_path}")
+        return full
+
+    async def _get_lock(self, path: str) -> asyncio.Lock:
+        """Get or create a lock for a specific file path."""
+        async with self._lock:
+            if path not in self._file_locks:
+                self._file_locks[path] = asyncio.Lock()
+            return self._file_locks[path]
+
+    async def read_file(self, rel_path: str) -> str:
+        """Read a file from the workspace."""
+        full = self._validate_path(rel_path)
+        if not full.exists():
+            raise FileNotFoundError(f"File not found: {rel_path}")
+        async with aiofiles.open(full, "r") as f:
+            return await f.read()
+
+    async def write_file(self, rel_path: str, content: str) -> dict:
+        """
+        Write a file to the workspace with locking.
+        Returns a diff dict showing what changed.
+        """
+        full = self._validate_path(rel_path)
+        lock = await self._get_lock(rel_path)
+
+        async with lock:
+            # Get old content for diff
+            old_content = ""
+            if full.exists():
+                async with aiofiles.open(full, "r") as f:
+                    old_content = await f.read()
+
+            # Ensure parent directory exists
+            full.parent.mkdir(parents=True, exist_ok=True)
+
+            # Write new content
+            async with aiofiles.open(full, "w") as f:
+                await f.write(content)
+
+            # Generate diff
+            diff = self._generate_diff(rel_path, old_content, content)
+
+            # Store for future diffs
+            self._file_versions[rel_path] = content
+
+            logger.info(f"Wrote file: {rel_path} ({len(content)} chars)")
+            return diff
+
+    async def delete_file(self, rel_path: str) -> bool:
+        """Delete a file from the workspace."""
+        full = self._validate_path(rel_path)
+        lock = await self._get_lock(rel_path)
+
+        async with lock:
+            if full.exists():
+                full.unlink()
+                self._file_versions.pop(rel_path, None)
+                logger.info(f"Deleted file: {rel_path}")
+                return True
+            return False
+
+    async def list_files(self, rel_path: str = "") -> list[dict]:
+        """List files and directories in the workspace."""
+        target = self._validate_path(rel_path) if rel_path else self.root
+        if not target.exists():
+            return []
+
+        entries = []
+        try:
+            for entry in sorted(target.iterdir()):
+                # Skip hidden files and common noise
+                if entry.name.startswith('.') and entry.name not in ('.env',):
+                    continue
+                if entry.name in ('__pycache__', 'node_modules', '.git', 'venv', '.venv'):
+                    continue
+
+                rel = str(entry.relative_to(self.root))
+                if entry.is_dir():
+                    children = sum(1 for _ in entry.iterdir()) if entry.is_dir() else 0
+                    entries.append({
+                        "name": entry.name,
+                        "path": rel,
+                        "type": "directory",
+                        "children": children,
+                    })
+                else:
+                    entries.append({
+                        "name": entry.name,
+                        "path": rel,
+                        "type": "file",
+                        "size": entry.stat().st_size,
+                    })
+        except PermissionError:
+            logger.warning(f"Permission denied: {target}")
+
+        return entries
+
+    async def list_files_recursive(self, max_depth: int = 4) -> list[dict]:
+        """List all files recursively for codebase scanning."""
+        files = []
+        for root, dirs, filenames in os.walk(self.root):
+            # Filter directories
+            dirs[:] = [
+                d for d in dirs
+                if not d.startswith('.') and d not in ('__pycache__', 'node_modules', 'venv', '.venv')
+            ]
+
+            depth = str(root).replace(str(self.root), '').count(os.sep)
+            if depth >= max_depth:
+                dirs.clear()
+                continue
+
+            for fname in filenames:
+                if fname.startswith('.') and fname != '.env':
+                    continue
+                full = Path(root) / fname
+                rel = str(full.relative_to(self.root))
+                files.append({
+                    "path": rel,
+                    "size": full.stat().st_size,
+                    "ext": full.suffix,
+                })
+
+        return files
+
+    def _generate_diff(self, path: str, old: str, new: str) -> dict:
+        """Generate a unified diff between old and new content."""
+        if not old:
+            return {
+                "path": path,
+                "type": "created",
+                "additions": len(new.splitlines()),
+                "deletions": 0,
+                "diff": f"+++ {path} (new file)\n" + "\n".join(
+                    f"+{line}" for line in new.splitlines()[:50]
+                ),
+            }
+
+        old_lines = old.splitlines(keepends=True)
+        new_lines = new.splitlines(keepends=True)
+        diff_lines = list(difflib.unified_diff(
+            old_lines, new_lines,
+            fromfile=f"a/{path}", tofile=f"b/{path}",
+            lineterm=""
+        ))
+
+        additions = sum(1 for l in diff_lines if l.startswith('+') and not l.startswith('+++'))
+        deletions = sum(1 for l in diff_lines if l.startswith('-') and not l.startswith('---'))
+
+        return {
+            "path": path,
+            "type": "modified",
+            "additions": additions,
+            "deletions": deletions,
+            "diff": "\n".join(diff_lines[:100]),  # Cap diff size
+        }
