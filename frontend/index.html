@@ -13,6 +13,7 @@
         rel="stylesheet">
     <link rel="stylesheet" href="/static/css/styles.css">
     <link rel="stylesheet" href="/static/css/features.css">
+    <link rel="stylesheet" href="/static/css/review.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
@@ -145,6 +146,7 @@
         <div class="bottom-tabs">
             <button class="bottom-tab active" data-panel="terminal-panel">🖥️ Terminal</button>
             <button class="bottom-tab" data-panel="tasks-panel">📋 Tasks</button>
+            <button class="bottom-tab" data-panel="review-panel">🔍 Review</button>
         </div>
 
         <div class="bottom-content">
@@ -181,6 +183,28 @@
                     <div class="kanban-column" data-status="done">
                         <div class="kanban-header">✅ Done <span class="kanban-count" id="count-done">0</span></div>
                         <div class="kanban-cards" id="cards-done"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Review Panel -->
+            <div class="bottom-panel" id="review-panel">
+                <div class="review-panel-content">
+                    <div class="review-header-bar">
+                        <div class="review-status">
+                            <span class="review-status-badge pending" id="review-status-badge">⏳ Pending</span>
+                            <span class="review-cycle-info" id="review-cycle"></span>
+                        </div>
+                        <div class="review-score" id="review-score">
+                            <span class="review-score-value">—</span>
+                            <span class="review-score-label">/100</span>
+                        </div>
+                    </div>
+                    <div class="review-content" id="review-content">
+                        <div class="review-empty">
+                            <div class="review-empty-icon">🔍</div>
+                            <p>Review results will appear here after a mission completes</p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -235,6 +259,7 @@
     <script src="/static/js/folder-picker.js"></script>
     <script src="/static/js/features-panel.js"></script>
     <script src="/static/js/diff-panel.js"></script>
+    <script src="/static/js/review-panel.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 

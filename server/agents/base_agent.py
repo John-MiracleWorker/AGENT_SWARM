@@ -624,10 +624,39 @@ class BaseAgent(ABC):
         })
 
     async def _trigger_mission_complete(self):
-        """Handle mission completion — stop all agents, save history, and broadcast finish."""
+        """Handle mission completion — run review, then stop all agents, save history, and broadcast finish."""
         summary = self.tasks.get_summary()
         logger.info(f"[{self.agent_id}] 🏁 Mission complete! Tasks: {summary}")
 
+        # --- Post-completion review ---
+        try:
+            from server.main import state
+            from server.core.project_reviewer import run_review_loop
+
+            async def on_new_tasks(issues):
+                """Create tasks from review issues and re-activate agents."""
+                for issue in issues:
+                    self.tasks.add_task(
+                        title=f"[Review] {issue.get('title', 'Fix issue')}",
+                        description=issue.get("description", ""),
+                        assignee=issue.get("assignee", "developer"),
+                    )
+                # Broadcast updated tasks
+                await self.bus.publish(
+                    sender=self.agent_id,
+                    sender_role=self.role,
+                    msg_type=MessageType.TASK_ASSIGNED,
+                    content="Review found issues — new tasks created",
+                    data={"tasks": self.tasks.list_tasks()},
+                )
+
+            review = await run_review_loop(state, self.tasks, self.bus, on_new_tasks=on_new_tasks)
+            logger.info(f"[{self.agent_id}] 📝 Review finished: {review.get('status')} (cycle {review.get('cycle', '?')})")
+
+        except Exception as e:
+            logger.error(f"Post-completion review failed: {e}", exc_info=True)
+
+        # --- Broadcast mission complete ---
         await self.bus.publish(
             sender=self.agent_id,
             sender_role=self.role,

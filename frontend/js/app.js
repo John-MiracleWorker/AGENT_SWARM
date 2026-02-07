@@ -28,6 +28,7 @@ class App {
         folderPicker.init();
         if (window.features) window.features.init();
         if (window.diffPanel) window.diffPanel.init();
+        if (window.reviewPanel) window.reviewPanel.init();
 
         // Connect WebSocket
         swarmWS.connect();
