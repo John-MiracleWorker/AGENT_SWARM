@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from server.core.gemini_client import GeminiClient
+from server.core.model_router import ModelRouter
 from server.core.message_bus import MessageBus
 from server.core.workspace import WorkspaceManager
 from server.core.task_manager import TaskManager
@@ -49,10 +49,11 @@ class SwarmState:
 
     def __init__(self):
         api_key = os.getenv("GEMINI_API_KEY", "")
+        groq_key = os.getenv("GROQ_API_KEY", "")
         if not api_key:
             logger.warning("GEMINI_API_KEY not set! Agents will fail to think.")
 
-        self.gemini = GeminiClient(api_key=api_key)
+        self.gemini = ModelRouter(gemini_api_key=api_key, groq_api_key=groq_key)
         self.message_bus = MessageBus()
         self.workspace = WorkspaceManager()
         self.task_manager = TaskManager()

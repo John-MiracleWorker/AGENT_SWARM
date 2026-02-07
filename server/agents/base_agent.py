@@ -12,7 +12,7 @@ from typing import Optional
 from enum import Enum
 
 from server.core.message_bus import MessageBus, MessageType, Message
-from server.core.gemini_client import GeminiClient, BudgetExhaustedError
+from server.core.model_router import ModelRouter as GeminiClient, BudgetExhaustedError
 from server.core.workspace import WorkspaceManager
 from server.core.task_manager import TaskManager, TaskStatus
 from server.core.terminal import TerminalExecutor
@@ -113,6 +113,18 @@ class BaseAgent(ABC):
     def resume(self):
         self._paused = False
 
+    def _has_assigned_tasks(self) -> bool:
+        """Check if this agent has any tasks assigned by the orchestrator."""
+        tasks = self.tasks.get_tasks_for_agent(self.agent_id)
+        return len(tasks) > 0
+
+    def _should_wait_for_tasks(self) -> bool:
+        """
+        Non-orchestrator agents should wait for tasks before acting.
+        Override in orchestrator to return False.
+        """
+        return True
+
     async def _event_loop(self):
         """Main observe → think → act loop."""
         while self._running:
@@ -120,6 +132,14 @@ class BaseAgent(ABC):
                 if self._paused:
                     self.status = AgentStatus.PAUSED
                     await asyncio.sleep(1)
+                    continue
+
+                # GATE: Non-orchestrator agents wait for task assignments
+                if self._should_wait_for_tasks() and not self._has_assigned_tasks():
+                    # Still collect messages (don't lose them) but don't act yet
+                    _ = await self._observe()  # drain queue to prevent buildup
+                    self.status = AgentStatus.IDLE
+                    await asyncio.sleep(2)
                     continue
 
                 # OBSERVE — collect new messages
@@ -252,6 +272,7 @@ class BaseAgent(ABC):
                 agent_id=self.agent_id,
                 system_prompt=self.system_prompt,
                 messages=trimmed,
+                role=self.role,
             )
 
             # Broadcast thought bubble with reasoning
@@ -553,6 +574,51 @@ class BaseAgent(ABC):
                     self._messages_history.append({
                         "role": "user",
                         "content": f"[System] Failed to spawn agent: {str(e)[:200]}",
+                    })
+
+            elif action_type == "create_novel_agent":
+                # Create an entirely new specialist agent with custom role/capabilities
+                role_name = params.get("role_name", "Specialist")
+                specialization = params.get("specialization", "")
+                capabilities = params.get("capabilities", ["code", "communicate"])
+                custom_guidelines = params.get("custom_guidelines", "")
+                reason = params.get("reason", "")
+                try:
+                    from server.main import state as app_state
+                    # Pass the current mission goal as context
+                    mission_ctx = ""
+                    if hasattr(self, '_messages_history') and self._messages_history:
+                        for msg in self._messages_history:
+                            if "[MISSION GOAL]" in msg.get("content", ""):
+                                mission_ctx = msg["content"]
+                                break
+
+                    result = await app_state.agent_spawner.spawn_dynamic_agent(
+                        role_name=role_name,
+                        specialization=specialization,
+                        capabilities=capabilities,
+                        custom_guidelines=custom_guidelines,
+                        mission_context=mission_ctx,
+                        reason=reason,
+                        state=app_state,
+                    )
+                    if result:
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[System] Successfully created novel agent: {result['id']} "
+                                       f"(role={role_name}, spec={specialization}). "
+                                       f"You can now assign tasks to '{result['id']}'.",
+                        })
+                    else:
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[System] Could not create novel agent — at max capacity (4 dynamic agents).",
+                        })
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] Novel agent spawn failed: {e}")
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[System] Failed to create novel agent: {str(e)[:200]}",
                     })
 
             elif action_type == "kill_agent":

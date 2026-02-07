@@ -3,6 +3,7 @@ Agent Spawner — Dynamically create/destroy agent instances at runtime.
 
 The orchestrator can spawn additional agents (e.g., developer-2) when it
 decides parallel work is needed, and kill them when they're no longer useful.
+Also supports NOVEL agents — custom roles defined by the orchestrator at runtime.
 """
 
 import asyncio
@@ -12,6 +13,7 @@ from typing import Optional
 from server.agents.developer import DeveloperAgent
 from server.agents.reviewer import ReviewerAgent
 from server.agents.tester import TesterAgent
+from server.agents.dynamic_agent import DynamicAgent
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,7 @@ ROLE_LIMITS = {
     "developer": 3,
     "reviewer": 2,
     "tester": 2,
+    "dynamic": 4,  # max novel agents the orchestrator can create
 }
 
 # Map role names → agent classes
@@ -139,6 +142,97 @@ class AgentSpawner:
                 "color": color,
                 "emoji": emoji,
                 "status": "idle",
+                "reason": reason,
+            },
+        )
+
+        return agent.get_status_dict()
+
+    async def spawn_dynamic_agent(
+        self,
+        role_name: str,
+        specialization: str = "",
+        capabilities: list[str] = None,
+        custom_guidelines: str = "",
+        mission_context: str = "",
+        reason: str = "",
+        state=None,
+    ) -> Optional[dict]:
+        """
+        Spawn a NOVEL agent with a custom role defined by the orchestrator.
+
+        Unlike spawn_agent (which clones existing types), this creates a
+        completely new agent with a custom system prompt and capabilities.
+        """
+        from server.core.message_bus import MessageType
+
+        # Check dynamic agent capacity
+        dynamic_count = sum(
+            1 for a in state.agents.values()
+            if hasattr(a, '_specialization')  # DynamicAgent marker
+        )
+        limit = ROLE_LIMITS.get("dynamic", 4)
+        if dynamic_count >= limit:
+            logger.warning(f"Cannot spawn dynamic agent: at capacity ({dynamic_count}/{limit})")
+            await state.message_bus.publish(
+                sender="system",
+                sender_role="System",
+                msg_type=MessageType.SYSTEM,
+                content=f"⚠️ Cannot spawn another novel agent — at max capacity ({dynamic_count}/{limit})",
+            )
+            return None
+
+        # Generate a clean agent ID from role_name
+        clean_name = role_name.lower().replace(" ", "-").replace("_", "-")
+        # Append counter if needed
+        counter = 1
+        agent_id = clean_name
+        while agent_id in state.agents:
+            counter += 1
+            agent_id = f"{clean_name}-{counter}"
+
+        # Build agent kwargs
+        agent_kwargs = dict(
+            gemini=state.gemini,
+            message_bus=state.message_bus,
+            workspace=state.workspace,
+            task_manager=state.task_manager,
+            terminal=state.terminal,
+            context_manager=state.context_manager,
+        )
+
+        # Create the dynamic agent
+        agent = DynamicAgent(
+            agent_id=agent_id,
+            role_name=role_name,
+            specialization=specialization,
+            capabilities=capabilities or ["code", "communicate"],
+            custom_guidelines=custom_guidelines,
+            mission_context=mission_context,
+            **agent_kwargs,
+        )
+
+        # Register and start
+        state.agents[agent_id] = agent
+        await agent.start()
+
+        logger.info(f"🧬 Spawned novel agent: {agent_id} (role={role_name}, spec={specialization})")
+
+        # Broadcast spawn event
+        await state.message_bus.publish(
+            sender="system",
+            sender_role="System",
+            msg_type=MessageType.AGENT_STATUS,
+            content=f"🧬 Novel agent created: {agent_id} — {specialization}",
+            data={
+                "event": "agent_spawned",
+                "id": agent_id,
+                "role": role_name,
+                "color": agent.color,
+                "emoji": agent.emoji,
+                "status": "idle",
+                "specialization": specialization,
+                "is_dynamic": True,
                 "reason": reason,
             },
         )

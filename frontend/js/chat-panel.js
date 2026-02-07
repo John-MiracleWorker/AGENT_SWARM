@@ -88,17 +88,9 @@ class ChatPanel {
 
         let contentHtml = this._formatContent(content, type);
 
-        // Add approval buttons for approval requests
+        // Approval requests go to sticky banner, not inline
         if (type === 'approval_request' && data.approval_id) {
-            contentHtml += `
-                <div class="approval-card">
-                    <span>⚠️ Requires your approval</span>
-                    <div class="approval-buttons">
-                        <button class="btn-approve" onclick="window.app.approveAction('${data.approval_id}', true)">✅ Approve</button>
-                        <button class="btn-reject" onclick="window.app.approveAction('${data.approval_id}', false)">❌ Reject</button>
-                    </div>
-                </div>
-            `;
+            this._showApprovalBanner(data, content, sender, senderRole);
         }
 
         // Add terminal output for terminal messages
@@ -131,11 +123,7 @@ class ChatPanel {
             el.style.display = 'none';
         }
 
-        // Smart auto-scroll — only if user is near the bottom
-        const isNearBottom = this.container.scrollHeight - this.container.scrollTop - this.container.clientHeight < 150;
-        if (isNearBottom) {
-            this.container.scrollTop = this.container.scrollHeight;
-        }
+        // Auto-scroll disabled — user controls scroll position
     }
 
     _formatContent(content, type) {
@@ -177,6 +165,51 @@ class ChatPanel {
         const div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
+    }
+
+    _showApprovalBanner(data, content, sender, senderRole) {
+        // Create or get the approval banner container
+        let container = document.getElementById('approval-banner-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'approval-banner-container';
+            document.body.prepend(container);
+        }
+
+        const banner = document.createElement('div');
+        banner.className = 'approval-banner';
+        banner.dataset.approvalId = data.approval_id;
+
+        const AGENT_COLORS = { orchestrator: '#FFD700', developer: '#00E5FF', reviewer: '#AA00FF', tester: '#00E676' };
+        const color = AGENT_COLORS[sender] || '#888';
+
+        banner.innerHTML = `
+            <div class="approval-banner-content">
+                <span class="approval-banner-icon">⚠️</span>
+                <div class="approval-banner-info">
+                    <strong style="color: ${color}">${senderRole}</strong> needs approval
+                    <div class="approval-banner-detail">${this._escapeHtml(content).substring(0, 120)}</div>
+                </div>
+                <div class="approval-banner-actions">
+                    <button class="btn-approve" id="approve-${data.approval_id}">✅ Approve</button>
+                    <button class="btn-reject" id="reject-${data.approval_id}">❌ Reject</button>
+                </div>
+            </div>
+        `;
+
+        container.appendChild(banner);
+
+        // Attach click handlers
+        document.getElementById(`approve-${data.approval_id}`).addEventListener('click', () => {
+            window.app.approveAction(data.approval_id, true);
+            banner.remove();
+            if (container.children.length === 0) container.remove();
+        });
+        document.getElementById(`reject-${data.approval_id}`).addEventListener('click', () => {
+            window.app.approveAction(data.approval_id, false);
+            banner.remove();
+            if (container.children.length === 0) container.remove();
+        });
     }
 }
 

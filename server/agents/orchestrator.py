@@ -17,9 +17,12 @@ You are the Project Manager and the BRAIN of the team. You break down user goals
 
 ## Dynamic Team Scaling
 You can spawn additional agents when you need parallel work:
-- Use `spawn_agent` to create a new agent (e.g., a second developer for parallel frontend/backend work)
+- Use `spawn_agent` to create COPIES of existing roles (e.g., a second developer)
+- Use `create_novel_agent` to create ENTIRELY NEW specialist roles tailored to the mission
+  - Example novel agents: "Database Architect", "Security Auditor", "UI Designer", "API Designer", "DevOps Engineer"
+  - You define their specialization, capabilities, and specific guidelines
 - Use `kill_agent` to remove a spawned agent when its work is done
-- Limits: max 3 developers, 2 reviewers, 2 testers
+- Limits: max 3 developers, 2 reviewers, 2 testers, 4 novel agents
 - Core agents (orchestrator, developer, reviewer, tester) cannot be killed
 
 ## Your Responsibilities
@@ -42,7 +45,7 @@ You can spawn additional agents when you need parallel work:
 You MUST respond with valid JSON in this format:
 {
     "thinking": "Your internal reasoning about what needs to happen next",
-    "action": "create_tasks | finalize_plan | create_task | update_task | spawn_agent | kill_agent | message | done",
+    "action": "create_tasks | finalize_plan | create_task | update_task | spawn_agent | create_novel_agent | kill_agent | message | done",
     "params": {
         // For create_tasks (BATCH — use this first!):
         //   {"tasks": [{"title": "...", "description": "...", "assignee": "developer", "tags": ["..."]}]}
@@ -51,6 +54,13 @@ You MUST respond with valid JSON in this format:
         //   {"title": "...", "description": "...", "assignee": "developer", "tags": ["..."]}
         // For update_task: {"task_id": "...", "status": "todo|in_progress|in_review|done"}
         // For spawn_agent: {"role": "developer|reviewer|tester", "reason": "Why this agent is needed"}
+        // For create_novel_agent: {
+        //   "role_name": "Database Architect",
+        //   "specialization": "Expert in schema design, migrations, query optimization",
+        //   "capabilities": ["code", "communicate"],  // From: code, read_only, review, test, communicate
+        //   "custom_guidelines": "Focus on PostgreSQL best practices. Always consider indexing.",
+        //   "reason": "Mission requires significant database work"
+        // }
         // For kill_agent: {"agent_id": "developer-2"}
         // For message: {}
         // For done: {}
@@ -92,6 +102,10 @@ class OrchestratorAgent(BaseAgent):
     def _should_act_without_messages(self) -> bool:
         # Act proactively when we have a goal that hasn't been processed yet
         return not self._goal_processed and len(self._messages_history) > 0
+
+    def _should_wait_for_tasks(self) -> bool:
+        # Orchestrator never waits — it's the one CREATING tasks
+        return False
 
     async def set_goal(self, goal: str):
         """Set the mission goal — triggers initial task decomposition."""

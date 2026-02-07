@@ -858,7 +858,77 @@ body {
     border: 1px solid var(--border-default);
 }
 
-/* Approval card */
+/* Approval banner — fixed at top of viewport */
+#approval-banner-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 16px;
+    pointer-events: none;
+}
+
+.approval-banner {
+    pointer-events: auto;
+    background: rgba(20, 20, 30, 0.97);
+    border: 1px solid rgba(248, 113, 113, 0.5);
+    border-radius: var(--radius-md);
+    box-shadow: 0 4px 24px rgba(248, 113, 113, 0.15), 0 0 0 1px rgba(248, 113, 113, 0.1);
+    animation: approval-slide-in 0.3s ease-out;
+    backdrop-filter: blur(12px);
+}
+
+.approval-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+}
+
+.approval-banner-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+}
+
+.approval-banner-info {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-primary);
+    min-width: 0;
+}
+
+.approval-banner-detail {
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+
+.approval-banner-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+@keyframes approval-slide-in {
+    from {
+        transform: translateY(-100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* Legacy inline approval card (kept for fallback) */
 .approval-card {
     margin-top: 8px;
     padding: 8px 12px;
