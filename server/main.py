@@ -29,6 +29,8 @@ from server.core.plugin_registry import PluginRegistry
 from server.core.file_context import FileContextManager
 from server.core.pty_terminal import InteractiveTerminal
 from server.core.agent_spawner import AgentSpawner
+from server.core.shared_context import SharedContextStore
+from server.core.orchestrator_health import OrchestratorHealthMonitor
 from server.api.routes import create_router
 from server.api.websocket import websocket_endpoint, terminal_websocket_endpoint
 
@@ -67,6 +69,8 @@ class SwarmState:
         self.file_context = FileContextManager(client=self.gemini.client)
         self.interactive_terminal = InteractiveTerminal()
         self.agent_spawner = AgentSpawner()
+        self.shared_context = SharedContextStore()
+        self.health_monitor = OrchestratorHealthMonitor()
 
         # Connect file context to Gemini client for auto-injection
         self.gemini.set_file_context(self.file_context)

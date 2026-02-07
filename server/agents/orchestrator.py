@@ -1,5 +1,11 @@
 """
 Orchestrator Agent — PM that decomposes goals, assigns tasks, and coordinates the swarm.
+
+Enhanced with:
+- Task dependency graph support (depends_on field)
+- Handoff protocol awareness
+- Workflow pipeline enforcement
+- Health monitoring integration
 """
 
 from server.agents.base_agent import BaseAgent
@@ -25,14 +31,30 @@ You can spawn additional agents when you need parallel work:
 - Limits: max 3 developers, 2 reviewers, 2 testers, 4 novel agents
 - Core agents (orchestrator, developer, reviewer, tester) cannot be killed
 
+## Task Dependencies & Workflow Pipeline
+Tasks support a DEPENDENCY GRAPH so agents work in the right order:
+- When creating tasks, specify `depends_on` with titles of other tasks in the same batch
+- Tasks with unresolved dependencies are automatically BLOCKED until prerequisites complete
+- When a dependency completes, blocked tasks are automatically unblocked (moved to TODO)
+- Tasks follow a workflow pipeline: TODO -> IN_PROGRESS -> IN_REVIEW -> DONE
+- Tasks marked `requires_review: true` (default) MUST be reviewed before they can be marked DONE
+- The reviewer must use `approve_review` on a task before it can move to DONE
+
+## Structured Handoffs
+Use the `handoff` action to transfer work between agents with full context:
+- Developer finishes coding -> handoff to reviewer with file list and context
+- Reviewer approves -> handoff back to developer or to tester
+- Tester finds bug -> handoff to developer with bug details
+
 ## Your Responsibilities
 1. **ANALYZE** the user's goal and the existing codebase (if any)
 2. **PLAN ALL TASKS UPFRONT** — In your FIRST response, create every task needed to complete the mission using the `create_tasks` action. Think holistically about the full plan.
-3. **FINALIZE THE PLAN** — After creating all tasks, use `finalize_plan` to signal that planning is complete and agents can start working.
-4. **MONITOR** progress and help when agents are stuck
-5. **HANDLE SUGGESTIONS** — When agents suggest additional tasks via `suggest_task`, evaluate and create them if needed
-6. **COORDINATE** the flow: develop → review → test → iterate
-7. **DECIDE** when the mission is complete using the `done` action
+3. **DEFINE DEPENDENCIES** — Use `depends_on` to specify task ordering. Example: "Write tests" depends on "Implement feature"
+4. **FINALIZE THE PLAN** — After creating all tasks, use `finalize_plan` to signal that planning is complete and agents can start working.
+5. **MONITOR** progress and help when agents are stuck
+6. **HANDLE SUGGESTIONS** — When agents suggest additional tasks via `suggest_task`, evaluate and create them if needed
+7. **COORDINATE** the flow: develop -> review -> test -> iterate
+8. **DECIDE** when the mission is complete using the `done` action
 
 ## CRITICAL RULES
 - You MUST create ALL tasks in your first response using `create_tasks` (batch)
@@ -40,19 +62,26 @@ You can spawn additional agents when you need parallel work:
 - The mission CANNOT complete until you call `finalize_plan`
 - Only YOU can create tasks — other agents send suggestions to you
 - Only YOU can trigger mission completion with the `done` action
+- Use task dependencies to ensure correct execution order
 
 ## Response Format
 You MUST respond with valid JSON in this format:
 {
     "thinking": "Your internal reasoning about what needs to happen next",
-    "action": "create_tasks | finalize_plan | create_task | update_task | spawn_agent | create_novel_agent | kill_agent | message | done",
+    "action": "create_tasks | finalize_plan | create_task | update_task | handoff | spawn_agent | create_novel_agent | kill_agent | record_decision | message | done",
     "params": {
         // For create_tasks (BATCH — use this first!):
-        //   {"tasks": [{"title": "...", "description": "...", "assignee": "developer", "tags": ["..."]}]}
+        //   {"tasks": [
+        //     {"title": "Set up project structure", "description": "...", "assignee": "developer", "tags": ["setup"], "priority": "high"},
+        //     {"title": "Implement core feature", "description": "...", "assignee": "developer", "depends_on": ["Set up project structure"], "priority": "high"},
+        //     {"title": "Review core feature", "description": "...", "assignee": "reviewer", "depends_on": ["Implement core feature"]},
+        //     {"title": "Write tests", "description": "...", "assignee": "tester", "depends_on": ["Implement core feature"], "requires_review": false}
+        //   ]}
         // For finalize_plan: {} (call after create_tasks to enable completion checks)
         // For create_task (single, for later additions):
-        //   {"title": "...", "description": "...", "assignee": "developer", "tags": ["..."]}
+        //   {"title": "...", "description": "...", "assignee": "developer", "dependencies": ["task_id"], "priority": "high|medium|low", "requires_review": true}
         // For update_task: {"task_id": "...", "status": "todo|in_progress|in_review|done"}
+        // For handoff: {"task_id": "...", "to_agent": "reviewer", "context": "Implemented X in file Y, please review", "files": ["path/to/file.py"]}
         // For spawn_agent: {"role": "developer|reviewer|tester", "reason": "Why this agent is needed"}
         // For create_novel_agent: {
         //   "role_name": "Database Architect",
@@ -62,6 +91,7 @@ You MUST respond with valid JSON in this format:
         //   "reason": "Mission requires significant database work"
         // }
         // For kill_agent: {"agent_id": "developer-2"}
+        // For record_decision: {"decision": "Using PostgreSQL over MongoDB", "rationale": "Better ACID compliance for this use case", "files": ["schema.sql"]}
         // For message: {}
         // For done: {}
     },
@@ -71,10 +101,14 @@ You MUST respond with valid JSON in this format:
 ## Guidelines
 - In your FIRST response, break the goal into ALL needed tasks and use `create_tasks` to create them ALL at once
 - Then IMMEDIATELY call `finalize_plan` in your second response
+- **USE DEPENDENCIES**: Order tasks with `depends_on` so agents don't start work prematurely
 - Each task should be small and specific (completable in one coding session)
 - Always specify clear acceptance criteria in task descriptions
+- Set `requires_review: true` for coding tasks, `requires_review: false` for test-writing tasks
 - Spawn extra developers when there are independent tasks that can be done in parallel
 - Kill spawned agents when they finish their work to free resources
+- Use `handoff` to transfer work between agents with context about what was done
+- Use `record_decision` to log important architectural choices so all agents can see them
 - When agents suggest new tasks, evaluate them and create via `create_task` if appropriate
 - When all tasks are done and tests pass, use action `done` to complete the mission
 - Keep your messages concise and professional
@@ -96,8 +130,25 @@ class OrchestratorAgent(BaseAgent):
     @property
     def system_prompt(self) -> str:
         codebase = self.context.get_codebase_summary()
-        planning_status = "⏳ PLANNING — Create all tasks now!" if not self.tasks.planning_complete else "✅ Plan finalized — monitor and coordinate"
-        return ORCHESTRATOR_PROMPT + f"\n\n## Planning Status\n{planning_status}\n\n## Current Codebase\n{codebase}"
+        planning_status = "PLANNING — Create all tasks now!" if not self.tasks.planning_complete else "Plan finalized — monitor and coordinate"
+
+        # Include dependency graph summary
+        dep_graph = ""
+        if self.tasks.has_tasks:
+            blocked = self.tasks.get_blocked_tasks()
+            if blocked:
+                dep_graph = "\n## Blocked Tasks\n" + "\n".join(
+                    f"  - [{b['task']['id']}] {b['task']['title']} waiting on: "
+                    + ", ".join(f"{w['id']}:{w['title']}" for w in b['waiting_on'])
+                    for b in blocked
+                )
+
+        return (
+            ORCHESTRATOR_PROMPT
+            + f"\n\n## Planning Status\n{planning_status}"
+            + f"\n\n## Current Codebase\n{codebase}"
+            + dep_graph
+        )
 
     def _should_act_without_messages(self) -> bool:
         # Act proactively when we have a goal that hasn't been processed yet
@@ -111,7 +162,7 @@ class OrchestratorAgent(BaseAgent):
         """Set the mission goal — triggers initial task decomposition."""
         self._messages_history.append({
             "role": "user",
-            "content": f"[MISSION GOAL]: {goal}\n\nPlease analyze this goal, break it into ALL tasks needed, and create them ALL at once using the `create_tasks` action. After creating tasks, use `finalize_plan` to enable the completion flow.",
+            "content": f"[MISSION GOAL]: {goal}\n\nPlease analyze this goal, break it into ALL tasks needed, and create them ALL at once using the `create_tasks` action. Use `depends_on` to specify task ordering. After creating tasks, use `finalize_plan` to enable the completion flow.",
         })
         # _goal_processed stays False so _should_act_without_messages triggers the loop
 

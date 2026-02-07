@@ -1,6 +1,12 @@
 """
 Base Agent — Abstract base class for all agents in the swarm.
-Implements the observe → think → act event loop.
+Implements the observe -> think -> act event loop.
+
+Enhanced with:
+- Shared context integration (file changes, decisions, handoffs)
+- Structured handoff protocol (developer -> reviewer -> tester)
+- Dependency-aware task gating
+- Health heartbeat reporting
 """
 
 import asyncio
@@ -37,7 +43,7 @@ class AgentStatus(str, Enum):
 
 class BaseAgent(ABC):
     """
-    Base agent with observe → think → act loop.
+    Base agent with observe -> think -> act loop.
     All specialized agents inherit from this.
     """
 
@@ -81,6 +87,44 @@ class BaseAgent(ABC):
     def system_prompt(self) -> str:
         """Role-specific system prompt for Gemini."""
         pass
+
+    def _get_shared_context_summary(self) -> str:
+        """Get shared context summary to inject into system prompt."""
+        try:
+            from server.main import state
+            if hasattr(state, 'shared_context'):
+                return state.shared_context.get_summary_for_agent(self.agent_id)
+        except (ImportError, AttributeError):
+            pass
+        return ""
+
+    def _get_pending_handoffs_summary(self) -> str:
+        """Get pending handoffs directed at this agent."""
+        handoffs = self.tasks.get_pending_handoffs(self.agent_id)
+        if not handoffs:
+            return ""
+        lines = []
+        for t in handoffs:
+            lines.append(
+                f"  - Task [{t.id}] \"{t.title}\" handed off from {t.assignee or '?'}: {t.handoff_reason or 'No context provided'}"
+            )
+        return "## Pending Handoffs To You\n" + "\n".join(lines)
+
+    def _get_blocked_tasks_summary(self) -> str:
+        """Get summary of blocked tasks relevant to this agent."""
+        my_tasks = self.tasks.get_tasks_for_agent(self.agent_id)
+        blocked = [t for t in my_tasks if t.status == TaskStatus.BLOCKED]
+        if not blocked:
+            return ""
+        lines = []
+        for t in blocked:
+            dep_names = []
+            for dep_id in t.dependencies:
+                dep = self.tasks.get_task(dep_id)
+                if dep and dep.status != TaskStatus.DONE:
+                    dep_names.append(f"{dep.id}:{dep.title}({dep.status.value})")
+            lines.append(f"  - [{t.id}] \"{t.title}\" waiting on: {', '.join(dep_names)}")
+        return "## Your Blocked Tasks\n" + "\n".join(lines)
 
     def get_status_dict(self) -> dict:
         return {
@@ -126,7 +170,7 @@ class BaseAgent(ABC):
         return True
 
     async def _event_loop(self):
-        """Main observe → think → act loop."""
+        """Main observe -> think -> act loop."""
         while self._running:
             try:
                 if self._paused:
@@ -141,8 +185,10 @@ class BaseAgent(ABC):
                     actionable = any(
                         m.msg_type in (
                             MessageType.TASK_ASSIGNED,
+                            MessageType.TASK_UNBLOCKED,
                             MessageType.REVIEW_REQUEST,
                             MessageType.REVIEW_RESULT,
+                            MessageType.HANDOFF,
                         )
                         or self.agent_id in m.mentions
                         for m in pending
@@ -180,6 +226,9 @@ class BaseAgent(ABC):
                 await self._broadcast_status()
                 await self._act(action)
 
+                # Report heartbeat for health monitoring
+                self._report_heartbeat()
+
                 # Reset error counter on success & notify router
                 self._consecutive_errors = 0
                 self._error_backoff = 1.0
@@ -193,13 +242,12 @@ class BaseAgent(ABC):
                 break
             except BudgetExhaustedError as be:
                 logger.warning(f"[{self.agent_id}] Budget exhausted: {be}")
-                await self.bus.publish(Message(
+                await self.bus.publish(
                     sender=self.agent_id,
                     sender_role=self.role,
-                    msg_type=MessageType.STATUS,
-                    content=f"⚠️ Budget limit reached — agent paused",
-                    target="broadcast",
-                ))
+                    msg_type=MessageType.SYSTEM,
+                    content=f"Budget limit reached — agent paused",
+                )
                 # Trigger mission complete on budget exhaustion
                 try:
                     await self._trigger_mission_complete()
@@ -229,13 +277,12 @@ class BaseAgent(ABC):
                         )
                     except Exception:
                         pass
-                    await self.bus.publish(Message(
+                    await self.bus.publish(
                         sender=self.agent_id,
                         sender_role=self.role,
-                        msg_type=MessageType.STATUS,
-                        content=f"🔴 Auto-paused after {MAX_CONSECUTIVE_ERRORS} consecutive errors: {str(e)[:100]}",
-                        target="broadcast",
-                    ))
+                        msg_type=MessageType.SYSTEM,
+                        content=f"Auto-paused after {MAX_CONSECUTIVE_ERRORS} consecutive errors: {str(e)[:100]}",
+                    )
                     self.pause()
                 else:
                     # Exponential backoff
@@ -247,6 +294,15 @@ class BaseAgent(ABC):
     def _should_act_without_messages(self) -> bool:
         """Override in subclass if agent should act proactively."""
         return False
+
+    def _report_heartbeat(self):
+        """Report activity to the health monitor."""
+        try:
+            from server.main import state
+            if hasattr(state, 'health_monitor'):
+                state.health_monitor.record_heartbeat()
+        except (ImportError, AttributeError):
+            pass
 
     async def _observe(self) -> list[Message]:
         """Read new messages from the bus."""
@@ -276,8 +332,7 @@ class BaseAgent(ABC):
         trimmed = self.context.trim_messages(self._messages_history)
 
         # Broadcast thinking bubble (throttled — max once per 10s)
-        import time as _time
-        now = _time.time()
+        now = time.time()
         if now - self._last_thinking_broadcast >= 10:
             self._last_thinking_broadcast = now
             await self.bus.publish(
@@ -287,10 +342,22 @@ class BaseAgent(ABC):
                 content="Analyzing context and deciding next action...",
             )
 
+        # Build enhanced system prompt with shared context
+        enhanced_prompt = self.system_prompt
+        shared_ctx = self._get_shared_context_summary()
+        if shared_ctx:
+            enhanced_prompt += f"\n\n{shared_ctx}"
+        handoff_ctx = self._get_pending_handoffs_summary()
+        if handoff_ctx:
+            enhanced_prompt += f"\n\n{handoff_ctx}"
+        blocked_ctx = self._get_blocked_tasks_summary()
+        if blocked_ctx:
+            enhanced_prompt += f"\n\n{blocked_ctx}"
+
         try:
             action = await self.gemini.generate(
                 agent_id=self.agent_id,
-                system_prompt=self.system_prompt,
+                system_prompt=enhanced_prompt,
                 messages=trimmed,
                 role=self.role,
             )
@@ -332,13 +399,13 @@ class BaseAgent(ABC):
                     if checkpoint_match["action"] == "pause":
                         await self._request_approval(
                             action_type, params,
-                            f"🚧 Checkpoint: {checkpoint_match['label']}. Agent wants to: {action_type}"
+                            f"Checkpoint: {checkpoint_match['label']}. Agent wants to: {action_type}"
                         )
                         return
                     elif checkpoint_match["action"] == "confirm":
                         await self._request_approval(
                             action_type, params,
-                            f"⚠️ Requires confirmation: {checkpoint_match['label']}"
+                            f"Requires confirmation: {checkpoint_match['label']}"
                         )
                         return
             except ImportError:
@@ -354,6 +421,8 @@ class BaseAgent(ABC):
                     content=f"Wrote file: {path}",
                     data={"diff": diff, "path": path},
                 )
+                # Record in shared context
+                self._record_file_change([path], f"Created/wrote file: {path}")
 
             elif action_type == "edit_file":
                 path = params.get("path", "")
@@ -374,6 +443,8 @@ class BaseAgent(ABC):
                         content=f"Edited file: {path}",
                         data={"diff": diff, "path": path},
                     )
+                    # Record in shared context
+                    self._record_file_change([path], f"Edited file: {path}")
                 except (FileNotFoundError, ValueError) as e:
                     self._messages_history.append({
                         "role": "user",
@@ -394,7 +465,7 @@ class BaseAgent(ABC):
                 # ALL terminal commands require user approval
                 approved = await self._request_approval(
                     "run_command", params,
-                    f"🖥️ [{self.agent_id}] wants to run: `{command}`",
+                    f"[{self.agent_id}] wants to run: `{command}`",
                 )
                 if not approved:
                     self._messages_history.append({
@@ -433,7 +504,11 @@ class BaseAgent(ABC):
                         description=params.get("description", ""),
                         created_by=self.agent_id,
                         assignee=params.get("assignee"),
+                        dependencies=params.get("dependencies", []),
                         tags=params.get("tags", []),
+                        priority=params.get("priority", "medium"),
+                        requires_review=params.get("requires_review", True),
+                        requires_testing=params.get("requires_testing", False),
                     )
                     await self.bus.publish(
                         sender=self.agent_id,
@@ -454,6 +529,9 @@ class BaseAgent(ABC):
                 else:
                     task_list = params.get("tasks", [])
                     created = []
+                    # Two-pass creation: first pass creates tasks, second pass resolves deps
+                    # (since deps reference task IDs that may not exist yet in same batch)
+                    temp_id_map = {}  # title -> actual_id for cross-referencing
                     for t in task_list:
                         task = self.tasks.create_task(
                             title=t.get("title", ""),
@@ -461,14 +539,42 @@ class BaseAgent(ABC):
                             created_by=self.agent_id,
                             assignee=t.get("assignee"),
                             tags=t.get("tags", []),
+                            priority=t.get("priority", "medium"),
+                            requires_review=t.get("requires_review", True),
+                            requires_testing=t.get("requires_testing", False),
                         )
                         created.append(task)
+                        temp_id_map[t.get("title", "")] = task.id
+
+                    # Second pass: resolve dependencies by title reference
+                    for i, t in enumerate(task_list):
+                        dep_refs = t.get("depends_on", []) or t.get("dependencies", [])
+                        if dep_refs:
+                            resolved_deps = []
+                            for ref in dep_refs:
+                                # Try as task ID first, then as title match
+                                if ref in temp_id_map.values():
+                                    resolved_deps.append(ref)
+                                elif ref in temp_id_map:
+                                    resolved_deps.append(temp_id_map[ref])
+                                else:
+                                    logger.warning(f"Unresolvable dependency reference: {ref}")
+                            if resolved_deps:
+                                created[i].dependencies = resolved_deps
+                                # Check if should be blocked
+                                unresolved = any(
+                                    self.tasks.get_task(d) and self.tasks.get_task(d).status != TaskStatus.DONE
+                                    for d in resolved_deps
+                                )
+                                if unresolved:
+                                    created[i].status = TaskStatus.BLOCKED
+
                     # Broadcast all tasks at once
                     await self.bus.publish(
                         sender=self.agent_id,
                         sender_role=self.role,
                         msg_type=MessageType.TASK_ASSIGNED,
-                        content=f"📋 Created {len(created)} tasks for the mission",
+                        content=f"Created {len(created)} tasks for the mission",
                         data={"tasks": [t.to_dict() for t in created]},
                     )
                     self._messages_history.append({
@@ -489,7 +595,7 @@ class BaseAgent(ABC):
                         sender=self.agent_id,
                         sender_role=self.role,
                         msg_type=MessageType.SYSTEM,
-                        content=f"📋 Plan finalized with {len(self.tasks.list_tasks())} tasks — agents can now work!",
+                        content=f"Plan finalized with {len(self.tasks.list_tasks())} tasks — agents can now work!",
                     )
 
             elif action_type == "suggest_task":
@@ -498,7 +604,7 @@ class BaseAgent(ABC):
                     sender=self.agent_id,
                     sender_role=self.role,
                     msg_type=MessageType.CHAT,
-                    content=f"💡 Task suggestion: {params.get('title', '')}\nReason: {params.get('reason', message)}",
+                    content=f"Task suggestion: {params.get('title', '')}\nReason: {params.get('reason', message)}",
                     data={"suggestion": params},
                     mentions=["orchestrator"],
                 )
@@ -508,7 +614,16 @@ class BaseAgent(ABC):
                 status_str = params.get("status", "")
                 if status_str:
                     status = TaskStatus(status_str)
-                    task = self.tasks.update_status(task_id, status, self.agent_id)
+                    try:
+                        task = self.tasks.update_status(task_id, status, self.agent_id)
+                    except ValueError as e:
+                        # Workflow validation failed — inform agent
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[System] Cannot update task: {str(e)}",
+                        })
+                        return
+
                     await self.bus.publish(
                         sender=self.agent_id,
                         sender_role=self.role,
@@ -516,7 +631,16 @@ class BaseAgent(ABC):
                         content=f"Task [{task_id}] updated to {status.value}",
                         data=task.to_dict(),
                     )
-                    # Check if all tasks are now complete → auto-stop
+
+                    # Report task progress to health monitor
+                    try:
+                        from server.main import state
+                        if hasattr(state, 'health_monitor'):
+                            state.health_monitor.record_task_progress()
+                    except (ImportError, AttributeError):
+                        pass
+
+                    # Check if all tasks are now complete -> auto-stop
                     if status == TaskStatus.DONE and self.tasks.all_done:
                         # Only orchestrator can actually trigger completion
                         if self.role == "Orchestrator":
@@ -527,9 +651,81 @@ class BaseAgent(ABC):
                                 sender=self.agent_id,
                                 sender_role=self.role,
                                 msg_type=MessageType.CHAT,
-                                content="🏁 All tasks appear to be done! Orchestrator, please verify and use `done` to complete the mission.",
+                                content="All tasks appear to be done! Orchestrator, please verify and use `done` to complete the mission.",
                                 mentions=["orchestrator"],
                             )
+
+            elif action_type == "handoff":
+                # Structured handoff from one agent to another
+                task_id = params.get("task_id", "")
+                target_agent = params.get("to_agent", "")
+                handoff_context = params.get("context", message)
+                files = params.get("files", [])
+
+                if task_id and target_agent:
+                    # Record handoff in task manager
+                    self.tasks.set_handoff(task_id, target_agent, handoff_context)
+
+                    # Record in shared context store
+                    try:
+                        from server.main import state
+                        if hasattr(state, 'shared_context'):
+                            state.shared_context.record_handoff(
+                                agent_id=self.agent_id,
+                                agent_role=self.role,
+                                target_agent=target_agent,
+                                context=handoff_context,
+                                files=files,
+                                task_id=task_id,
+                            )
+                    except (ImportError, AttributeError):
+                        pass
+
+                    # Publish structured handoff message
+                    await self.bus.publish_handoff(
+                        from_agent=self.agent_id,
+                        from_role=self.role,
+                        to_agent=target_agent,
+                        task_id=task_id,
+                        context=handoff_context,
+                        files=files,
+                    )
+                else:
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": "[System] handoff requires 'task_id' and 'to_agent' parameters.",
+                    })
+
+            elif action_type == "record_decision":
+                # Record an architectural/implementation decision in shared context
+                decision = params.get("decision", message)
+                rationale = params.get("rationale", "")
+                files = params.get("files", [])
+                try:
+                    from server.main import state
+                    if hasattr(state, 'shared_context'):
+                        state.shared_context.record_decision(
+                            agent_id=self.agent_id,
+                            agent_role=self.role,
+                            decision=decision,
+                            rationale=rationale,
+                            files=files,
+                        )
+                except (ImportError, AttributeError):
+                    pass
+
+            elif action_type == "approve_review":
+                # Reviewer approves a task — marks it as reviewed and ready to complete
+                task_id = params.get("task_id", "")
+                if task_id:
+                    self.tasks.mark_reviewed(task_id, self.agent_id)
+                    await self.bus.publish(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.REVIEW_RESULT,
+                        content=f"Approved task [{task_id}]",
+                        data={"task_id": task_id, "result": "approved", "reviewer": self.agent_id},
+                    )
 
             elif action_type == "request_review":
                 await self.bus.publish(
@@ -564,7 +760,7 @@ class BaseAgent(ABC):
                     if tool_obj and tool_obj.requires_approval:
                         await self._request_approval(
                             "use_tool", params,
-                            f"🔧 Tool [{tool_name}] requires approval: {tool_obj.description}"
+                            f"Tool [{tool_name}] requires approval: {tool_obj.description}"
                         )
                         return
 
@@ -583,7 +779,7 @@ class BaseAgent(ABC):
                             sender=self.agent_id,
                             sender_role=self.role,
                             msg_type=MessageType.TERMINAL_OUTPUT,
-                            content=f"🔧 Tool [{tool_name}]: {cmd[:100]}",
+                            content=f"Tool [{tool_name}]: {cmd[:100]}",
                             data=result.to_dict(),
                         )
                         self._messages_history.append({
@@ -704,7 +900,7 @@ class BaseAgent(ABC):
                 # ALL terminal commands require user approval
                 approved = await self._request_approval(
                     "use_terminal", params,
-                    f"🖥️ [{self.agent_id}] wants to run in terminal '{session_id}': `{command}`",
+                    f"[{self.agent_id}] wants to run in terminal '{session_id}': `{command}`",
                 )
                 if not approved:
                     self._messages_history.append({
@@ -804,6 +1000,20 @@ class BaseAgent(ABC):
                 content=f"Error executing {action_type}: {str(e)}",
             )
 
+    def _record_file_change(self, files: list[str], description: str):
+        """Record a file change in the shared context store."""
+        try:
+            from server.main import state
+            if hasattr(state, 'shared_context'):
+                state.shared_context.record_file_change(
+                    agent_id=self.agent_id,
+                    agent_role=self.role,
+                    files=files,
+                    description=description,
+                )
+        except (ImportError, AttributeError):
+            pass
+
     async def _request_approval(self, action_type: str, params: dict, description: str) -> bool:
         """Request user approval for a command. Blocks until approved/rejected or timeout."""
         import uuid
@@ -856,7 +1066,7 @@ class BaseAgent(ABC):
     async def _trigger_mission_complete(self):
         """Handle mission completion — run review, then stop all agents, save history, and broadcast finish."""
         summary = self.tasks.get_summary()
-        logger.info(f"[{self.agent_id}] 🏁 Mission complete! Tasks: {summary}")
+        logger.info(f"[{self.agent_id}] Mission complete! Tasks: {summary}")
 
         # --- Post-completion review ---
         try:
@@ -866,9 +1076,10 @@ class BaseAgent(ABC):
             async def on_new_tasks(issues):
                 """Create tasks from review issues and re-activate agents."""
                 for issue in issues:
-                    self.tasks.add_task(
+                    self.tasks.create_task(
                         title=f"[Review] {issue.get('title', 'Fix issue')}",
                         description=issue.get("description", ""),
+                        created_by=self.agent_id,
                         assignee=issue.get("assignee", "developer"),
                     )
                 # Broadcast updated tasks
@@ -881,7 +1092,7 @@ class BaseAgent(ABC):
                 )
 
             review = await run_review_loop(state, self.tasks, self.bus, on_new_tasks=on_new_tasks)
-            logger.info(f"[{self.agent_id}] 📝 Review finished: {review.get('status')} (cycle {review.get('cycle', '?')})")
+            logger.info(f"[{self.agent_id}] Review finished: {review.get('status')} (cycle {review.get('cycle', '?')})")
 
         except Exception as e:
             logger.error(f"Post-completion review failed: {e}", exc_info=True)
@@ -891,7 +1102,7 @@ class BaseAgent(ABC):
             sender=self.agent_id,
             sender_role=self.role,
             msg_type=MessageType.MISSION_COMPLETE,
-            content="✅ Mission complete — all tasks finished!",
+            content="Mission complete — all tasks finished!",
             data={"tasks": self.tasks.list_tasks(), "summary": summary},
         )
 
@@ -899,6 +1110,10 @@ class BaseAgent(ABC):
         try:
             from server.main import state
             import time as _time
+
+            # Stop health monitor
+            if hasattr(state, 'health_monitor'):
+                await state.health_monitor.stop()
 
             # Save mission history
             duration = _time.time() - state.mission_start_time if state.mission_start_time else 0

@@ -1,6 +1,11 @@
 """
 Message Bus — In-memory pub/sub for inter-agent communication.
 All messages are logged and forwarded to WebSocket clients.
+
+Enhanced with:
+- HANDOFF message type for structured agent-to-agent work transfers
+- TASK_BLOCKED / TASK_UNBLOCKED for dependency-aware notifications
+- Priority message delivery
 """
 
 import asyncio
@@ -18,8 +23,11 @@ class MessageType(str, Enum):
     CHAT = "chat"
     CODE_UPDATE = "code_update"
     TASK_ASSIGNED = "task_assigned"
+    TASK_BLOCKED = "task_blocked"  # NEW: task blocked by dependencies
+    TASK_UNBLOCKED = "task_unblocked"  # NEW: task unblocked, ready to work
     REVIEW_REQUEST = "review_request"
     REVIEW_RESULT = "review_result"
+    HANDOFF = "handoff"  # NEW: structured agent-to-agent work transfer
     DEBATE = "debate"
     TEST_RESULT = "test_result"
     APPROVAL_REQUEST = "approval_request"
@@ -30,6 +38,7 @@ class MessageType(str, Enum):
     AGENT_STATUS = "agent_status"
     THOUGHT = "thought"
     MISSION_COMPLETE = "mission_complete"
+    STALL_WARNING = "stall_warning"  # NEW: orchestrator health warning
 
 
 @dataclass
@@ -43,6 +52,7 @@ class Message:
     data: dict = field(default_factory=dict)
     channel: str = "general"
     mentions: list[str] = field(default_factory=list)
+    priority: int = 0  # NEW: higher = more important (0=normal, 1=high, 2=urgent)
 
     def to_dict(self) -> dict:
         return {
@@ -55,6 +65,7 @@ class Message:
             "data": self.data,
             "channel": self.channel,
             "mentions": self.mentions,
+            "priority": self.priority,
         }
 
 
@@ -101,6 +112,7 @@ class MessageBus:
         data: Optional[dict] = None,
         channel: str = "general",
         mentions: Optional[list[str]] = None,
+        priority: int = 0,
     ) -> Message:
         """Publish a message to all subscribers."""
         msg = Message(
@@ -113,6 +125,7 @@ class MessageBus:
             data=data or {},
             channel=channel,
             mentions=mentions or [],
+            priority=priority,
         )
 
         # Store in history
@@ -122,13 +135,19 @@ class MessageBus:
                 self._history = self._history[-self._max_history:]
 
         # Deliver to agent queues (skip sender)
+        broadcast_types = (
+            MessageType.SYSTEM,
+            MessageType.AGENT_STATUS,
+            MessageType.TASK_ASSIGNED,
+            MessageType.TASK_BLOCKED,
+            MessageType.TASK_UNBLOCKED,
+            MessageType.STALL_WARNING,
+        )
         for agent_id, queue in self._agent_queues.items():
             if agent_id != sender:
                 # If message has mentions, only deliver to mentioned agents
                 # (unless it's a broadcast type)
-                if mentions and agent_id not in mentions and msg_type not in (
-                    MessageType.SYSTEM, MessageType.AGENT_STATUS, MessageType.TASK_ASSIGNED
-                ):
+                if mentions and agent_id not in mentions and msg_type not in broadcast_types:
                     continue
                 try:
                     queue.put_nowait(msg)
@@ -145,6 +164,35 @@ class MessageBus:
 
         logger.debug(f"[{sender}] {msg_type.value}: {content[:100]}")
         return msg
+
+    async def publish_handoff(
+        self,
+        from_agent: str,
+        from_role: str,
+        to_agent: str,
+        task_id: str,
+        context: str,
+        files: Optional[list[str]] = None,
+    ) -> Message:
+        """
+        Publish a structured handoff message from one agent to another.
+        This is the primary mechanism for agent-to-agent work transfer.
+        """
+        return await self.publish(
+            sender=from_agent,
+            sender_role=from_role,
+            msg_type=MessageType.HANDOFF,
+            content=f"Handing off task [{task_id}] to @{to_agent}: {context}",
+            data={
+                "task_id": task_id,
+                "from_agent": from_agent,
+                "to_agent": to_agent,
+                "context": context,
+                "files": files or [],
+            },
+            mentions=[to_agent],
+            priority=1,
+        )
 
     def get_history(
         self,
@@ -169,3 +217,12 @@ class MessageBus:
             or not m.mentions  # broadcast messages
         ]
         return [m.to_dict() for m in msgs[-limit:]]
+
+    def get_handoffs_for_agent(self, agent_id: str) -> list[dict]:
+        """Get pending handoff messages targeted at a specific agent."""
+        msgs = [
+            m for m in self._history
+            if m.msg_type == MessageType.HANDOFF
+            and agent_id in m.mentions
+        ]
+        return [m.to_dict() for m in msgs]
