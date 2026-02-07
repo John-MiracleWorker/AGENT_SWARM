@@ -1,82 +1,158 @@
 /**
- * Task Panel — Progress-tracked task overview with auto-complete detection.
- * Shows real-time checklist of tasks and mission completion state.
+ * Task Panel — Enhanced task overview with agent filtering and checkboxes.
+ * Shows all tasks across all agents with real-time status updates.
  */
 
 class TaskPanel {
     constructor() {
         this.tasks = {};
         this.missionComplete = false;
+        this.activeFilter = 'all'; // 'all' or agent role name
     }
 
     init() {
         swarmWS.on('message', (msg) => {
             if (msg.type === 'task_assigned' && msg.data) {
-                this.updateTask(msg.data);
+                // Could be a single task or a list
+                if (Array.isArray(msg.data.tasks)) {
+                    msg.data.tasks.forEach(t => this._ingestTask(t));
+                } else {
+                    this._ingestTask(msg.data);
+                }
+                this._render();
             }
 
-            // Handle mission completion broadcast
             if (msg.type === 'mission_complete') {
                 this._handleMissionComplete(msg.data || {});
             }
         });
+
+        // Build filter bar
+        this._buildFilterBar();
     }
 
-    updateTask(task) {
+    _ingestTask(task) {
         const id = task.id;
         if (!id) return;
+        this.tasks[id] = { ...this.tasks[id], ...task };
+    }
 
-        // Remove from old column if exists
-        const existing = document.getElementById(`task-${id}`);
-        if (existing) existing.remove();
+    _buildFilterBar() {
+        const board = document.getElementById('kanban-board');
+        if (!board) return;
 
-        this.tasks[id] = task;
+        // Insert filter bar above the kanban columns
+        let filterBar = document.getElementById('task-filter-bar');
+        if (!filterBar) {
+            filterBar = document.createElement('div');
+            filterBar.id = 'task-filter-bar';
+            filterBar.className = 'task-filter-bar';
+            board.parentElement.insertBefore(filterBar, board);
+        }
 
-        // Add to correct column
-        const status = task.status || 'todo';
-        const column = document.getElementById(`cards-${status}`);
-        if (!column) return;
+        this._updateFilterBar();
+    }
 
-        const card = document.createElement('div');
-        card.className = 'kanban-card';
-        card.id = `task-${id}`;
+    _updateFilterBar() {
+        const filterBar = document.getElementById('task-filter-bar');
+        if (!filterBar) return;
 
-        const assigneeColor = {
+        // Collect unique assignees
+        const assignees = new Set();
+        Object.values(this.tasks).forEach(t => {
+            if (t.assignee) assignees.add(t.assignee);
+        });
+
+        const colors = {
             orchestrator: '#FFD700',
             developer: '#00E5FF',
             reviewer: '#AA00FF',
             tester: '#00E676',
-        }[task.assignee] || '#888';
+        };
 
-        const statusIcon = this._statusIcon(status);
+        let html = `<button class="task-filter-btn ${this.activeFilter === 'all' ? 'active' : ''}" data-agent="all">
+            All <span class="task-filter-count">${Object.keys(this.tasks).length}</span>
+        </button>`;
 
-        card.innerHTML = `
-            <div class="kanban-card-header">
-                <span class="kanban-card-status">${statusIcon}</span>
-                <span class="kanban-card-title">${this._escapeHtml(task.title)}</span>
-            </div>
-            <div class="kanban-card-meta">
-                <span style="color: ${assigneeColor}">● ${task.assignee || 'unassigned'}</span>
-                <span class="kanban-card-id">#${id}</span>
-            </div>
-        `;
+        for (const agent of assignees) {
+            const count = Object.values(this.tasks).filter(t => t.assignee === agent).length;
+            const color = colors[agent] || '#888';
+            const isActive = this.activeFilter === agent ? 'active' : '';
+            html += `<button class="task-filter-btn ${isActive}" data-agent="${agent}" style="--agent-color: ${color}">
+                <span class="filter-dot" style="background: ${color}"></span>
+                ${this._escapeHtml(agent)} <span class="task-filter-count">${count}</span>
+            </button>`;
+        }
 
-        card.title = task.description || '';
-        column.appendChild(card);
+        filterBar.innerHTML = html;
 
-        // Update counts and check completion
+        // Attach click handlers
+        filterBar.querySelectorAll('.task-filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                this.activeFilter = btn.dataset.agent;
+                this._render();
+            });
+        });
+    }
+
+    _render() {
+        this._updateFilterBar();
+        this._renderCards();
         this._updateCounts();
     }
 
-    _statusIcon(status) {
-        const icons = {
-            'todo': '○',
-            'in_progress': '◔',
-            'in_review': '◑',
-            'done': '●',
-            'blocked': '⊘',
-        };
-        return icons[status] || '○';
+    _renderCards() {
+        const statuses = ['todo', 'in_progress', 'in_review', 'done'];
+
+        // Clear all columns
+        statuses.forEach(s => {
+            const col = document.getElementById(`cards-${s}`);
+            if (col) col.innerHTML = '';
+        });
+
+        // Get filtered tasks
+        const filtered = Object.values(this.tasks).filter(t => {
+            if (this.activeFilter === 'all') return true;
+            return t.assignee === this.activeFilter;
+        });
+
+        // Sort: most recently updated first within each status
+        for (const task of filtered) {
+            const status = task.status || 'todo';
+            const column = document.getElementById(`cards-${status}`);
+            if (!column) continue;
+
+            const card = document.createElement('div');
+            card.className = 'kanban-card';
+            card.id = `task-${task.id}`;
+
+            const assigneeColor = {
+                orchestrator: '#FFD700',
+                developer: '#00E5FF',
+                reviewer: '#AA00FF',
+                tester: '#00E676',
+            }[task.assignee] || '#888';
+
+            const isDone = status === 'done';
+            const checkboxIcon = isDone ? '☑' : status === 'in_progress' ? '◧' : '☐';
+            const checkboxClass = isDone ? 'checked' : status === 'in_progress' ? 'partial' : '';
+            const titleClass = isDone ? 'task-done' : '';
+
+            card.innerHTML = `
+                <div class="kanban-card-header">
+                    <span class="task-checkbox ${checkboxClass}">${checkboxIcon}</span>
+                    <span class="kanban-card-title ${titleClass}">${this._escapeHtml(task.title)}</span>
+                </div>
+                ${task.description ? `<div class="kanban-card-desc">${this._escapeHtml(task.description).substring(0, 80)}${task.description.length > 80 ? '…' : ''}</div>` : ''}
+                <div class="kanban-card-meta">
+                    <span style="color: ${assigneeColor}">● ${task.assignee || 'unassigned'}</span>
+                    <span class="kanban-card-id">#${task.id}</span>
+                </div>
+            `;
+
+            card.title = task.description || '';
+            column.appendChild(card);
+        }
     }
 
     _handleMissionComplete(data) {
@@ -106,9 +182,9 @@ class TaskPanel {
             </div>
         `;
 
-        const taskBody = document.querySelector('#task-panel .panel-body');
-        if (taskBody) {
-            taskBody.prepend(banner);
+        const board = document.getElementById('kanban-board');
+        if (board && board.parentElement) {
+            board.parentElement.insertBefore(banner, board);
         }
 
         // Update app state
@@ -128,10 +204,8 @@ class TaskPanel {
             stopBtn.style.borderColor = '#00E676';
         }
 
-        // Add system message
-        if (window.terminalPanel) {
-            terminalPanel.addSystemMessage('🏁 Mission complete — all tasks finished. Agents stopped.');
-        }
+        // Mark all tasks as done visually
+        this._render();
     }
 
     _updateCounts() {
@@ -154,14 +228,13 @@ class TaskPanel {
             const pct = (done / total) * 100;
             fill.style.width = `${pct}%`;
 
-            // Color gradient based on progress
             if (pct >= 100) {
                 fill.style.background = 'linear-gradient(90deg, #00E676, #69F0AE)';
             } else if (pct >= 50) {
                 fill.style.background = 'linear-gradient(90deg, var(--accent), #00E5FF)';
             }
         }
-        if (text) {
+        if (text && !this.missionComplete) {
             text.textContent = `${done}/${total} tasks`;
         }
     }
