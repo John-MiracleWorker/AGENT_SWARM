@@ -29,6 +29,7 @@ class MessageType(str, Enum):
     SYSTEM = "system"
     AGENT_STATUS = "agent_status"
     THOUGHT = "thought"
+    HANDOFF = "handoff"
     MISSION_COMPLETE = "mission_complete"
 
 

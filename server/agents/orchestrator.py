@@ -49,10 +49,10 @@ You MUST respond with valid JSON in this format:
     "action": "create_tasks | finalize_plan | create_task | update_task | spawn_agent | create_novel_agent | kill_agent | message | done",
     "params": {
         // For create_tasks (BATCH — use this first!):
-        //   {"tasks": [{"title": "...", "description": "...", "assignee": "developer", "tags": ["..."]}]}
+        //   {"tasks": [{"title": "...", "description": "...", "assignee": "developer", "dependencies": ["task_id"], "tags": ["..."]}]}
         // For finalize_plan: {} (call after create_tasks to enable completion checks)
         // For create_task (single, for later additions):
-        //   {"title": "...", "description": "...", "assignee": "developer", "tags": ["..."]}
+        //   {"title": "...", "description": "...", "assignee": "developer", "dependencies": ["task_id"], "tags": ["..."]}
         // For update_task: {"task_id": "...", "status": "todo|in_progress|in_review|done"}
         // For spawn_agent: {"role": "developer|senior_developer|reviewer|tester", "reason": "Why this agent is needed"}
         // For create_novel_agent: {
@@ -88,6 +88,7 @@ The system enforces file safety rules automatically:
 - Spawn extra developers ONLY when tasks are on completely independent files.
 - If you see file reservation conflicts in the Recent File Activity section, immediately reassign work to avoid collisions.
 - During review fix cycles, create ONE fix task per issue with clear file ownership.
+- Use task dependencies for checks-and-balances: implementation -> review -> test for each major feature.
 
 ### Aggressive Parallelism
 - When you have **4+ tasks on independent files**, spawn additional developers (one per 2-3 tasks)
