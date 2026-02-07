@@ -131,8 +131,11 @@ class ChatPanel {
             el.style.display = 'none';
         }
 
-        // Auto-scroll
-        this.container.scrollTop = this.container.scrollHeight;
+        // Smart auto-scroll — only if user is near the bottom
+        const isNearBottom = this.container.scrollHeight - this.container.scrollTop - this.container.clientHeight < 150;
+        if (isNearBottom) {
+            this.container.scrollTop = this.container.scrollHeight;
+        }
     }
 
     _formatContent(content, type) {

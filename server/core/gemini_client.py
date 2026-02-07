@@ -23,8 +23,10 @@ class BudgetExhaustedError(Exception):
     pass
 
 # Model cascade — ordered by preference. Falls back on rate limit / errors.
+# Verified via ListModels API — only models supporting generateContent.
 MODEL_CASCADE = [
-    {"name": "gemini-3-flash",                   "rpm": 10, "cost_in": 0.15, "cost_out": 0.60},
+    {"name": "gemini-3-pro-preview",             "rpm": 5,  "cost_in": 1.25, "cost_out": 10.00},
+    {"name": "gemini-3-flash-preview",           "rpm": 10, "cost_in": 0.15, "cost_out": 0.60},
     {"name": "gemini-2.5-flash",                 "rpm": 10, "cost_in": 0.15, "cost_out": 0.60},
     {"name": "gemini-2.5-pro",                   "rpm": 5,  "cost_in": 1.25, "cost_out": 10.00},
     {"name": "gemini-2.0-flash",                 "rpm": 15, "cost_in": 0.10, "cost_out": 0.40},
@@ -72,7 +74,13 @@ class ModelState:
 
     @property
     def is_cooled_down(self) -> bool:
-        return time.time() >= self.cooldown_until
+        if time.time() >= self.cooldown_until:
+            # Reset errors when cooldown expires so better models get fresh retries
+            if self.consecutive_errors > 0:
+                logger.info(f"Model {self.name} cooldown expired, resetting for retry")
+                self.consecutive_errors = 0
+            return True
+        return False
 
     def record_success(self):
         self.consecutive_errors = 0
@@ -275,6 +283,43 @@ class GeminiClient:
                 elif "403" in error_str or "PERMISSION_DENIED" in error_str:
                     logger.error(f"[{agent_id}] 🔑 API key issue: {e}")
                     raise  # can't recover from auth errors
+
+                elif "404" in error_str or "NOT_FOUND" in error_str:
+                    # Model not available — cool down for 5 min then retry
+                    model_state.record_rate_limit()
+                    model_state.cooldown_until = time.time() + 300  # 5 min, then re-check
+                    logger.warning(f"[{agent_id}] ⚠️ {model_name} not found, cooling down 5min and trying next...")
+                    continue
+
+                elif "400" in error_str or "INVALID_ARGUMENT" in error_str:
+                    # Model may not support response_mime_type — retry without it
+                    logger.warning(f"[{agent_id}] ⚠️ {model_name} rejected request, retrying without JSON mode...")
+                    try:
+                        response = await asyncio.to_thread(
+                            self.client.models.generate_content,
+                            model=model_name,
+                            contents=contents,
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_prompt + "\n\nYou MUST respond with valid JSON only.",
+                                temperature=temperature,
+                            ),
+                        )
+                        model_state.record_success()
+                        self._track_usage(agent_id, response)
+                        text = response.text.strip()
+                        # Strip markdown code fences if present
+                        if text.startswith("```"):
+                            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                        try:
+                            result = json.loads(text)
+                            logger.info(f"[{agent_id}] ✅ {model_name} responded (no-JSON-mode)")
+                            return result
+                        except json.JSONDecodeError:
+                            return {"thinking": "", "action": "message", "params": {}, "message": text}
+                    except Exception as retry_e:
+                        logger.error(f"[{agent_id}] Retry without JSON mode also failed: {retry_e}")
+                        model_state.record_error()
+                        continue
 
                 elif "500" in error_str or "503" in error_str:
                     model_state.record_error()
