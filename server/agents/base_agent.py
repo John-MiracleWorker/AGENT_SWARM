@@ -591,6 +591,7 @@ class BaseAgent(ABC):
                         description=params.get("description", ""),
                         created_by=self.agent_id,
                         assignee=params.get("assignee"),
+                        dependencies=params.get("dependencies", []),
                         tags=params.get("tags", []),
                     )
                     await self.bus.publish(
@@ -618,6 +619,7 @@ class BaseAgent(ABC):
                             description=t.get("description", ""),
                             created_by=self.agent_id,
                             assignee=t.get("assignee"),
+                            dependencies=t.get("dependencies", []),
                             tags=t.get("tags", []),
                         )
                         created.append(task)
@@ -680,8 +682,16 @@ class BaseAgent(ABC):
                 task_id = params.get("task_id", "")
                 status_str = params.get("status", "")
                 if status_str:
-                    status = TaskStatus(status_str)
-                    task = self.tasks.update_status(task_id, status, self.agent_id)
+                    try:
+                        status = TaskStatus(status_str)
+                        task = self.tasks.update_status(task_id, status, self.agent_id)
+                    except ValueError as e:
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[System] Cannot update task status: {str(e)}",
+                        })
+                        return
+
                     await self.bus.publish(
                         sender=self.agent_id,
                         sender_role=self.role,
@@ -714,12 +724,51 @@ class BaseAgent(ABC):
                                 msg_type=MessageType.CHAT,
                                 content=(
                                     f"✅ Task '{task_title}' implementation complete. "
-                                    f"@tester please run tests to verify."
+                                    f"@reviewer review the code and @tester run tests to verify."
                                 ),
-                                mentions=["tester"],
+                                mentions=["reviewer", "tester"],
                             )
 
+            elif action_type == "handoff":
+                task_id = params.get("task_id", "")
+                files_touched = params.get("files_touched", [])
+                commands_run = params.get("commands_run", [])
+                risks = params.get("known_risks", [])
+                next_role = params.get("next_role", "")
+
+                await self.bus.publish(
+                    sender=self.agent_id,
+                    sender_role=self.role,
+                    msg_type=MessageType.HANDOFF,
+                    content=message or f"🤝 Handoff for task [{task_id}]",
+                    data={
+                        "task_id": task_id,
+                        "files_touched": files_touched,
+                        "commands_run": commands_run,
+                        "known_risks": risks,
+                        "next_role": next_role,
+                    },
+                    mentions=[next_role] if next_role else [],
+                )
+
             elif action_type == "request_review":
+                handoff_task_id = params.get("task_id", "")
+                if handoff_task_id:
+                    await self.bus.publish(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.HANDOFF,
+                        content=f"🤝 Pre-review handoff for task [{handoff_task_id}]",
+                        data={
+                            "task_id": handoff_task_id,
+                            "files_touched": params.get("files", []),
+                            "commands_run": params.get("commands_run", []),
+                            "known_risks": params.get("known_risks", []),
+                            "next_role": "reviewer",
+                        },
+                        mentions=params.get("reviewers", []),
+                    )
+
                 await self.bus.publish(
                     sender=self.agent_id,
                     sender_role=self.role,

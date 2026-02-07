@@ -105,10 +105,19 @@ class TaskManager:
 
     def update_status(self, task_id: str, status: TaskStatus, agent_id: str = "") -> Task:
         task = self._resolve_task(task_id)
+
+        if status == TaskStatus.IN_PROGRESS:
+            can_start, missing = self.can_start_task(task.id)
+            if not can_start:
+                missing_display = ", ".join(missing)
+                raise ValueError(
+                    f"Task [{task.id}] cannot start; unresolved dependencies: {missing_display}"
+                )
+
         old_status = task.status
         task.status = status
         task.updated_at = time.time()
-        logger.info(f"Task [{task_id}] {old_status.value} -> {status.value}")
+        logger.info(f"Task [{task.id}] {old_status.value} -> {status.value}")
         return task
 
     def assign_task(self, task_id: str, assignee: str) -> Task:
@@ -161,6 +170,33 @@ class TaskManager:
         if not self._tasks:
             return False
         return all(t.status == TaskStatus.DONE for t in self._tasks.values())
+
+
+    def are_dependencies_done(self, task_id: str) -> bool:
+        """Check whether all dependencies for a task are complete."""
+        task = self._resolve_task(task_id)
+        if not task.dependencies:
+            return True
+        for dep_id in task.dependencies:
+            dep = self._resolve_task(dep_id)
+            if dep.status != TaskStatus.DONE:
+                return False
+        return True
+
+    def unresolved_dependencies(self, task_id: str) -> list[str]:
+        """Return dependency IDs that are not yet in DONE state."""
+        task = self._resolve_task(task_id)
+        unresolved: list[str] = []
+        for dep_id in task.dependencies:
+            dep = self._resolve_task(dep_id)
+            if dep.status != TaskStatus.DONE:
+                unresolved.append(dep.id)
+        return unresolved
+
+    def can_start_task(self, task_id: str) -> tuple[bool, list[str]]:
+        """Whether a task can be moved to in_progress based on dependencies."""
+        missing = self.unresolved_dependencies(task_id)
+        return (len(missing) == 0, missing)
 
     def clear(self):
         """Clear all tasks for a new mission."""
