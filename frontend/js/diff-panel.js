@@ -26,7 +26,7 @@ class DiffPanel {
 
     async toggleDiffView() {
         const btn = document.getElementById('diff-tab-btn');
-        const codeContent = document.getElementById('code-content') || document.querySelector('.code-content');
+        const codeContent = document.getElementById('code-content') || document.querySelector('.code-content') || document.getElementById('code-viewer');
 
         if (this.isShowingDiff) {
             // Switch back to normal code view
@@ -65,7 +65,7 @@ class DiffPanel {
     }
 
     async showCommitDiff(sha) {
-        const codeContent = document.getElementById('code-content') || document.querySelector('.code-content');
+        const codeContent = document.getElementById('code-content') || document.querySelector('.code-content') || document.getElementById('code-viewer');
         if (!codeContent) return;
 
         try {

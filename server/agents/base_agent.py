@@ -402,12 +402,22 @@ class BaseAgent(ABC):
                 # Plugin system — execute a registered tool
                 tool_name = params.get("tool", "")
                 tool_path = params.get("path", ".")
+                tool_pattern = params.get("pattern", "")
                 try:
                     from server.main import state as app_state
+                    tool_obj = app_state.plugin_registry.get_tool(tool_name)
+                    if tool_obj and tool_obj.requires_approval:
+                        await self._request_approval(
+                            "use_tool", params,
+                            f"🔧 Tool [{tool_name}] requires approval: {tool_obj.description}"
+                        )
+                        return
+
                     cmd = app_state.plugin_registry.build_command(
                         tool_name,
                         workspace=str(self.workspace.root),
                         path=tool_path,
+                        pattern=tool_pattern,
                     )
                     if cmd:
                         result = await self.terminal.execute(
@@ -418,17 +428,18 @@ class BaseAgent(ABC):
                             sender=self.agent_id,
                             sender_role=self.role,
                             msg_type=MessageType.TERMINAL_OUTPUT,
-                            content=f"🔧 Tool [{tool_name}]: {cmd}",
+                            content=f"🔧 Tool [{tool_name}]: {cmd[:100]}",
                             data=result.to_dict(),
                         )
                         self._messages_history.append({
                             "role": "user",
-                            "content": f"[Tool {tool_name} output]:\n{result.stdout[:2000]}\n{result.stderr[:500]}",
+                            "content": f"[Tool {tool_name} output]:\n{result.stdout[:3000]}\n{result.stderr[:500]}",
                         })
                     else:
+                        available = [t['name'] for t in app_state.plugin_registry.list_tools()]
                         self._messages_history.append({
                             "role": "user",
-                            "content": f"Unknown tool: {tool_name}. Available: {[t['name'] for t in app_state.plugin_registry.list_tools()]}",
+                            "content": f"Unknown tool: {tool_name}. Available: {available}",
                         })
                 except ImportError:
                     pass

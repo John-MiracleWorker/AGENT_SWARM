@@ -26,8 +26,10 @@ from server.core.mission_store import MissionStore
 from server.core.checkpoints import CheckpointManager
 from server.core.agent_memory import AgentMemory
 from server.core.plugin_registry import PluginRegistry
+from server.core.file_context import FileContextManager
+from server.core.pty_terminal import InteractiveTerminal
 from server.api.routes import create_router
-from server.api.websocket import websocket_endpoint
+from server.api.websocket import websocket_endpoint, terminal_websocket_endpoint
 
 # Load environment
 load_dotenv()
@@ -60,6 +62,11 @@ class SwarmState:
         self.checkpoints = CheckpointManager()
         self.agent_memory = AgentMemory()
         self.plugin_registry = PluginRegistry()
+        self.file_context = FileContextManager(client=self.gemini.client)
+        self.interactive_terminal = InteractiveTerminal()
+
+        # Connect file context to Gemini client for auto-injection
+        self.gemini.set_file_context(self.file_context)
         self.agents: dict = {}
         self.mission_id: str | None = None
         self.mission_goal: str | None = None
@@ -106,7 +113,8 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Agent Swarm starting up...")
     yield
     # Shutdown: stop all agents
-    logger.info("🛑 Shutting down agents...")
+    logger.info("🛑 Shutting down...")
+    await state.interactive_terminal.kill_all()
     for agent in state.agents.values():
         await agent.stop()
     await state.terminal.kill_all()
@@ -122,8 +130,9 @@ app = FastAPI(
 router = create_router(state)
 app.include_router(router, prefix="/api")
 
-# WebSocket endpoint
+# WebSocket endpoints
 app.add_api_websocket_route("/ws", websocket_endpoint)
+app.add_api_websocket_route("/ws/terminal", terminal_websocket_endpoint)
 
 # Mount frontend static files
 frontend_dir = Path(__file__).parent.parent / "frontend"

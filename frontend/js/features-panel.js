@@ -55,9 +55,9 @@ class FeaturesPanel {
         const text = document.getElementById('budget-text');
         if (!fill || !text) return;
 
-        const pct = data.percentage || 0;
-        const spent = data.spent || 0;
-        const limit = data.limit || 1;
+        const pct = data.percent_used || data.percentage || 0;
+        const spent = data.spent_usd || data.spent || 0;
+        const limit = data.limit_usd || data.limit || 1;
 
         fill.style.width = `${Math.min(pct, 100)}%`;
         text.textContent = `$${spent.toFixed(4)} / $${limit.toFixed(2)}`;
@@ -74,12 +74,67 @@ class FeaturesPanel {
 
     async showBudgetSettings() {
         const resp = await fetch('/api/budget');
-        const data = resp.ok ? await resp.json() : { limit: 1.0 };
+        const data = resp.ok ? await resp.json() : { limit_usd: 1.0 };
 
-        const limit = prompt(`Set budget limit (USD).\nCurrent: $${data.limit?.toFixed(2) || '1.00'}\nSpent: $${data.spent?.toFixed(4) || '0.00'}\n\nEnter new limit (0 = unlimited):`, data.limit || 1);
-        if (limit !== null && !isNaN(parseFloat(limit))) {
-            await fetch(`/api/budget?limit_usd=${parseFloat(limit)}`, { method: 'POST' });
-        }
+        const curLimit = data.limit_usd ?? data.limit ?? 1;
+        const curSpent = data.spent_usd ?? data.spent ?? 0;
+
+        // Build modal instead of using native prompt (browsers block async prompts)
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.innerHTML = `
+            <div class="modal-dialog" style="max-width: 380px;">
+                <div class="modal-header">
+                    <h3>💰 Budget Settings</h3>
+                    <button class="modal-close" id="budget-modal-close">✕</button>
+                </div>
+                <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px;">
+                    <div style="font-size: 12px; color: var(--text-secondary);">
+                        Current spend: <strong style="color: var(--text-primary);">$${curSpent.toFixed(4)}</strong>
+                    </div>
+                    <label style="font-size: 12px; color: var(--text-secondary);">
+                        Budget Limit (USD)
+                        <input type="number" id="budget-limit-input" value="${curLimit}"
+                            min="0" step="0.5"
+                            style="display: block; width: 100%; margin-top: 6px; padding: 8px 12px;
+                                   background: var(--bg-input); border: 1px solid var(--border-default);
+                                   border-radius: var(--radius-md); color: var(--text-primary);
+                                   font-size: 14px; font-family: 'JetBrains Mono', monospace; outline: none;">
+                    </label>
+                    <div style="font-size: 11px; color: var(--text-muted);">Set to 0 for unlimited.</div>
+                    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px;">
+                        <button id="budget-modal-cancel" class="btn-control" style="padding: 6px 14px; width: auto; font-size: 12px;">Cancel</button>
+                        <button id="budget-modal-save" class="btn-primary" style="padding: 6px 14px;">Save</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        // Focus the input
+        const input = document.getElementById('budget-limit-input');
+        setTimeout(() => input.select(), 50);
+
+        // Close handlers
+        const close = () => overlay.remove();
+        document.getElementById('budget-modal-close').onclick = close;
+        document.getElementById('budget-modal-cancel').onclick = close;
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+        // Save handler
+        document.getElementById('budget-modal-save').onclick = async () => {
+            const val = parseFloat(input.value);
+            if (!isNaN(val)) {
+                await fetch(`/api/budget?limit_usd=${val}`, { method: 'POST' });
+            }
+            close();
+        };
+
+        // Enter key saves
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') document.getElementById('budget-modal-save').click();
+            if (e.key === 'Escape') close();
+        });
     }
 
     // ── Feature Buttons in Navbar ──────────────────────────
@@ -137,7 +192,8 @@ class FeaturesPanel {
         this.openModal('📜 Mission History', '<div class="loading">Loading...</div>');
         try {
             const resp = await fetch('/api/missions/history');
-            const missions = resp.ok ? await resp.json() : [];
+            const raw = resp.ok ? await resp.json() : {};
+            const missions = raw.missions || raw || [];
 
             if (!missions.length) {
                 document.getElementById('modal-body').innerHTML = `
@@ -200,7 +256,8 @@ class FeaturesPanel {
         this.openModal('🧠 Agent Memory', '<div class="loading">Loading...</div>');
         try {
             const resp = await fetch('/api/memory');
-            const memories = resp.ok ? await resp.json() : [];
+            const raw = resp.ok ? await resp.json() : {};
+            const memories = raw.memories || raw || [];
 
             if (!memories.length) {
                 document.getElementById('modal-body').innerHTML = `
@@ -241,7 +298,8 @@ class FeaturesPanel {
         this.openModal('🚧 Safety Checkpoints', '<div class="loading">Loading...</div>');
         try {
             const resp = await fetch('/api/checkpoints');
-            const rules = resp.ok ? await resp.json() : [];
+            const raw = resp.ok ? await resp.json() : {};
+            const rules = raw.rules || raw || [];
 
             const html = rules.map(r => `
                 <div class="checkpoint-card">
@@ -287,7 +345,8 @@ class FeaturesPanel {
         this.openModal('🔧 Tools & Plugins', '<div class="loading">Loading...</div>');
         try {
             const resp = await fetch('/api/plugins');
-            const tools = resp.ok ? await resp.json() : [];
+            const raw = resp.ok ? await resp.json() : {};
+            const tools = raw.plugins || raw || [];
 
             const html = tools.map(t => `
                 <div class="plugin-card">
@@ -315,7 +374,8 @@ class FeaturesPanel {
         this.openModal('📁 Workspaces', '<div class="loading">Loading...</div>');
         try {
             const resp = await fetch('/api/workspaces');
-            const workspaces = resp.ok ? await resp.json() : [];
+            const raw = resp.ok ? await resp.json() : {};
+            const workspaces = raw.workspaces || raw || [];
 
             const html = workspaces.map(ws => `
                 <div class="workspace-card ${ws.active ? 'active' : ''}" onclick="window.features.switchWorkspace('${ws.id}')">

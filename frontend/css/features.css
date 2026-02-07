@@ -1,13 +1,14 @@
 /* ════════════════════════════════════════════════════════
    FEATURES CSS — Budget, History, Memory, Checkpoints, 
    Plugins, Workspaces, Thoughts, Debates, Diff Viewer
+   Uses design tokens from styles.css
    ════════════════════════════════════════════════════════ */
 
 /* ── Budget Display ──────────────────────────────── */
 .budget-display {
     display: flex;
     align-items: center;
-    padding: 0 12px;
+    padding: 0 10px;
     margin-left: auto;
 }
 
@@ -15,35 +16,35 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 20px;
-    padding: 4px 12px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    padding: 4px 10px;
+    border: 1px solid var(--border-default);
 }
 
 .budget-icon {
-    font-size: 14px;
+    font-size: 13px;
 }
 
 .budget-bar-wrap {
-    width: 80px;
-    height: 6px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 3px;
+    width: 70px;
+    height: 4px;
+    background: var(--bg-hover);
+    border-radius: 2px;
     overflow: hidden;
 }
 
 .budget-bar-fill {
     height: 100%;
-    background: var(--success, #00E676);
-    border-radius: 3px;
+    background: var(--success);
+    border-radius: 2px;
     transition: width 0.5s ease, background 0.5s ease;
 }
 
 .budget-text {
     font-size: 11px;
     font-family: 'JetBrains Mono', monospace;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--text-secondary);
     white-space: nowrap;
 }
 
@@ -52,55 +53,56 @@
     border: none;
     cursor: pointer;
     font-size: 12px;
-    opacity: 0.5;
-    transition: opacity 0.2s;
+    color: var(--text-muted);
+    transition: color var(--duration) var(--ease);
     padding: 0;
 }
 
 .budget-settings-btn:hover {
-    opacity: 1;
+    color: var(--text-primary);
 }
 
 /* ── Feature Buttons ─────────────────────────────── */
 .feature-buttons {
     display: flex;
-    gap: 4px;
-    margin-left: 8px;
+    gap: 3px;
+    margin-left: 6px;
     padding-left: 8px;
-    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    border-left: 1px solid var(--border-default);
 }
 
 .feature-btn {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 6px;
-    width: 32px;
-    height: 28px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    width: 30px;
+    height: 26px;
     cursor: pointer;
-    font-size: 13px;
+    font-size: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.2s;
+    transition: all var(--duration) var(--ease);
+    color: var(--text-muted);
 }
 
 .feature-btn:hover {
-    background: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.2);
-    transform: scale(1.05);
+    background: var(--bg-hover);
+    border-color: var(--border-hover);
+    color: var(--text-primary);
 }
 
 /* ── Modal ───────────────────────────────────────── */
 .modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(6px);
     z-index: 10000;
     display: flex;
     align-items: center;
     justify-content: center;
-    animation: fadeIn 0.15s ease;
+    animation: fadeIn 0.15s var(--ease);
 }
 
 .modal-overlay.hidden {
@@ -108,21 +110,21 @@
 }
 
 .modal-dialog {
-    background: var(--bg-secondary, #1a1a2e);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 16px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
     width: 90%;
-    max-width: 600px;
+    max-width: 560px;
     max-height: 80vh;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
-    animation: slideUp 0.2s ease;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+    animation: slideUp 0.2s var(--ease);
 }
 
 @keyframes slideUp {
     from {
-        transform: translateY(20px);
+        transform: translateY(16px);
         opacity: 0;
     }
 
@@ -136,38 +138,39 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 20px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-default);
 }
 
 .modal-header h3 {
     margin: 0;
-    font-size: 16px;
-    color: var(--text-primary, #eee);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-bright);
 }
 
 .modal-close {
     background: none;
     border: none;
-    color: rgba(255, 255, 255, 0.4);
-    font-size: 18px;
+    color: var(--text-muted);
+    font-size: 16px;
     cursor: pointer;
-    width: 28px;
-    height: 28px;
+    width: 26px;
+    height: 26px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 6px;
-    transition: all 0.2s;
+    border-radius: var(--radius-sm);
+    transition: all var(--duration) var(--ease);
 }
 
 .modal-close:hover {
-    background: rgba(255, 255, 255, 0.08);
-    color: white;
+    background: var(--bg-hover);
+    color: var(--text-primary);
 }
 
 .modal-body {
-    padding: 16px 20px;
+    padding: 14px 18px;
     overflow-y: auto;
     flex: 1;
 }
@@ -176,21 +179,22 @@
 .loading {
     text-align: center;
     padding: 24px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--text-muted);
 }
 
 .empty-state {
     text-align: center;
     padding: 32px;
-    color: rgba(255, 255, 255, 0.4);
+    color: var(--text-muted);
 }
 
 .empty-state p {
     margin-top: 8px;
+    color: var(--text-secondary);
 }
 
 .error {
-    color: var(--danger, #FF5252);
+    color: var(--danger);
     text-align: center;
     padding: 16px;
 }
@@ -199,61 +203,62 @@
 .history-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
 }
 
 .history-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 10px;
-    padding: 12px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all var(--duration) var(--ease);
 }
 
 .history-card:hover {
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.12);
+    background: var(--bg-hover);
+    border-color: var(--border-hover);
 }
 
 .history-header {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 
 .history-status {
-    font-size: 14px;
+    font-size: 13px;
 }
 
 .history-goal {
     font-weight: 500;
-    color: var(--text-primary, #eee);
+    color: var(--text-primary);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-size: 13px;
 }
 
 .history-meta {
     display: flex;
     gap: 12px;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.45);
+    font-size: 11px;
+    color: var(--text-muted);
 }
 
 /* ── Memory Cards ────────────────────────────────── */
 .memory-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
 }
 
 .memory-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 10px;
-    padding: 12px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 10px 14px;
 }
 
 .memory-header {
@@ -264,33 +269,34 @@
 }
 
 .memory-type {
-    font-size: 10px;
+    font-size: 9px;
     text-transform: uppercase;
-    padding: 2px 8px;
+    padding: 2px 7px;
     border-radius: 4px;
-    background: rgba(100, 100, 255, 0.15);
-    color: rgba(150, 150, 255, 0.9);
+    background: var(--accent-dim);
+    color: var(--accent-light);
     font-weight: 600;
+    letter-spacing: 0.2px;
 }
 
 .memory-type.error_recovery {
-    background: rgba(255, 82, 82, 0.15);
-    color: #FF5252;
+    background: rgba(248, 113, 113, 0.12);
+    color: var(--danger);
 }
 
 .memory-type.pattern {
-    background: rgba(0, 230, 118, 0.15);
-    color: #00E676;
+    background: rgba(52, 211, 153, 0.12);
+    color: var(--success);
 }
 
 .memory-type.feedback {
-    background: rgba(0, 229, 255, 0.15);
-    color: #00E5FF;
+    background: rgba(56, 189, 248, 0.12);
+    color: var(--info);
 }
 
 .memory-agent {
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.5);
+    font-size: 11px;
+    color: var(--text-muted);
 }
 
 .memory-delete {
@@ -298,24 +304,26 @@
     border: none;
     cursor: pointer;
     font-size: 12px;
-    opacity: 0.3;
-    transition: opacity 0.2s;
+    color: var(--text-muted);
+    opacity: 0.4;
+    transition: opacity var(--duration) var(--ease);
     margin-left: auto;
 }
 
 .memory-delete:hover {
     opacity: 1;
+    color: var(--danger);
 }
 
 .memory-lesson {
-    color: var(--text-primary, #eee);
+    color: var(--text-primary);
     font-size: 13px;
-    line-height: 1.4;
+    line-height: 1.5;
 }
 
 .memory-context {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.35);
+    color: var(--text-muted);
     margin-top: 4px;
     font-style: italic;
 }
@@ -324,14 +332,14 @@
 .checkpoint-list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
 }
 
 .checkpoint-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 8px;
-    padding: 10px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 8px 12px;
 }
 
 .checkpoint-header {
@@ -341,103 +349,112 @@
 }
 
 .checkpoint-trigger {
-    font-size: 10px;
+    font-size: 9px;
     text-transform: uppercase;
     padding: 2px 6px;
     border-radius: 4px;
-    background: rgba(255, 215, 0, 0.15);
-    color: #FFD700;
+    background: rgba(251, 191, 36, 0.12);
+    color: var(--warning);
     font-weight: 600;
 }
 
 .checkpoint-label {
     font-size: 13px;
-    color: var(--text-primary, #eee);
+    color: var(--text-primary);
 }
 
 .checkpoint-delete {
     background: none;
     border: none;
     cursor: pointer;
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--text-muted);
     margin-left: auto;
     font-size: 14px;
+    transition: color var(--duration) var(--ease);
 }
 
 .checkpoint-delete:hover {
-    color: #FF5252;
+    color: var(--danger);
 }
 
 .checkpoint-action {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.4);
+    color: var(--text-muted);
     margin-top: 4px;
 }
 
 .checkpoint-add {
-    margin-top: 16px;
-    padding-top: 16px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-default);
 }
 
 .checkpoint-add h4 {
     margin: 0 0 8px;
-    font-size: 14px;
-    color: var(--text-primary, #eee);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
 }
 
 .checkpoint-add input,
 .checkpoint-add select {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
     padding: 6px 10px;
-    color: white;
+    color: var(--text-primary);
     font-size: 13px;
     margin-right: 6px;
     margin-bottom: 6px;
+    font-family: inherit;
+    outline: none;
+}
+
+.checkpoint-add input:focus,
+.checkpoint-add select:focus {
+    border-color: var(--accent);
 }
 
 .btn-primary {
-    background: var(--accent, #7C4DFF);
+    background: var(--accent);
     color: white;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 6px 14px;
     cursor: pointer;
     font-size: 13px;
-    transition: all 0.2s;
+    font-weight: 600;
+    transition: all var(--duration) var(--ease);
 }
 
 .btn-primary:hover {
-    filter: brightness(1.15);
-    transform: scale(1.02);
+    background: var(--accent-light);
 }
 
 /* ── Plugin Cards ────────────────────────────────── */
 .plugin-list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
 }
 
 .plugin-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 8px;
-    padding: 10px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 8px 12px;
 }
 
 .plugin-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
 }
 
 .plugin-name {
     font-weight: 600;
-    color: var(--text-primary, #eee);
+    color: var(--text-primary);
     font-size: 13px;
 }
 
@@ -447,44 +464,45 @@
 
 .plugin-desc {
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--text-secondary);
     margin-bottom: 4px;
 }
 
 .plugin-cmd code {
     font-size: 11px;
-    color: rgba(0, 229, 255, 0.7);
-    background: rgba(0, 0, 0, 0.2);
+    color: var(--info);
+    background: var(--bg-base);
     padding: 2px 6px;
-    border-radius: 4px;
+    border-radius: 3px;
 }
 
 /* ── Workspace Cards ─────────────────────────────── */
 .workspace-list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
 }
 
 .workspace-card {
     display: flex;
     align-items: center;
     gap: 10px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 8px;
-    padding: 10px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 8px 12px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all var(--duration) var(--ease);
 }
 
 .workspace-card:hover {
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--bg-hover);
+    border-color: var(--border-hover);
 }
 
 .workspace-card.active {
-    border-color: var(--accent, #7C4DFF);
-    background: rgba(124, 77, 255, 0.08);
+    border-color: var(--accent);
+    background: var(--accent-dim);
 }
 
 .workspace-indicator {
@@ -500,19 +518,19 @@
 .workspace-name {
     font-weight: 500;
     font-size: 13px;
-    color: var(--text-primary, #eee);
+    color: var(--text-primary);
 }
 
 .workspace-path {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.35);
+    color: var(--text-muted);
     font-family: 'JetBrains Mono', monospace;
 }
 
 .workspace-add {
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-default);
     display: flex;
     gap: 6px;
     align-items: center;
@@ -520,20 +538,26 @@
 }
 
 .workspace-add input {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
     padding: 6px 10px;
-    color: white;
+    color: var(--text-primary);
     font-size: 13px;
     flex: 1;
     min-width: 150px;
+    font-family: inherit;
+    outline: none;
+}
+
+.workspace-add input:focus {
+    border-color: var(--accent);
 }
 
 /* ── Thought Bubbles (Live Reasoning) ────────────── */
 .thought-bubble {
-    border-left: 3px solid rgba(255, 215, 0, 0.3);
-    background: rgba(255, 215, 0, 0.03);
+    border-left: 2px solid rgba(251, 191, 36, 0.3);
+    background: rgba(251, 191, 36, 0.03);
 }
 
 .thought-bubble.collapsed .thought-content {
@@ -544,19 +568,19 @@
 }
 
 .thought-badge {
-    background: rgba(255, 215, 0, 0.15) !important;
-    color: #FFD700 !important;
-    font-size: 10px;
+    background: rgba(251, 191, 36, 0.12) !important;
+    color: var(--warning) !important;
+    font-size: 9px;
 }
 
 .thought-toggle {
     background: none;
     border: none;
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--text-muted);
     cursor: pointer;
     font-size: 10px;
     padding: 2px;
-    transition: transform 0.2s;
+    transition: transform 0.2s var(--ease);
 }
 
 .thought-bubble.collapsed .thought-toggle {
@@ -565,14 +589,14 @@
 
 /* ── Debate Cards ────────────────────────────────── */
 .debate-card {
-    border-left: 3px solid rgba(170, 0, 255, 0.4);
-    background: rgba(170, 0, 255, 0.03);
+    border-left: 2px solid rgba(167, 139, 250, 0.4);
+    background: rgba(167, 139, 250, 0.03);
 }
 
 .debate-badge {
-    background: rgba(170, 0, 255, 0.15) !important;
-    color: #AA00FF !important;
-    font-size: 10px;
+    background: rgba(167, 139, 250, 0.12) !important;
+    color: var(--color-reviewer) !important;
+    font-size: 9px;
 }
 
 .debate-thread {
@@ -583,12 +607,12 @@
 .debate-position {
     margin-top: 6px;
     font-size: 12px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--text-secondary);
 }
 
 .debate-target {
     font-size: 11px;
-    color: rgba(255, 255, 255, 0.35);
+    color: var(--text-muted);
     margin-top: 2px;
 }
 
@@ -603,11 +627,11 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
-    background: rgba(255, 255, 255, 0.03);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    font-size: 13px;
-    color: rgba(255, 255, 255, 0.7);
+    padding: 6px 12px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border-default);
+    font-size: 12px;
+    color: var(--text-secondary);
 }
 
 .diff-refresh,
@@ -616,12 +640,13 @@
     border: none;
     cursor: pointer;
     font-size: 14px;
-    opacity: 0.5;
+    color: var(--text-muted);
+    transition: color var(--duration) var(--ease);
 }
 
 .diff-refresh:hover,
 .diff-close:hover {
-    opacity: 1;
+    color: var(--text-primary);
 }
 
 .diff-content {
@@ -637,26 +662,26 @@
 }
 
 .diff-add {
-    color: #00E676;
-    background: rgba(0, 230, 118, 0.08);
+    color: var(--success);
+    background: rgba(52, 211, 153, 0.06);
     display: inline-block;
     width: 100%;
 }
 
 .diff-del {
-    color: #FF5252;
-    background: rgba(255, 82, 82, 0.08);
+    color: var(--danger);
+    background: rgba(248, 113, 113, 0.06);
     display: inline-block;
     width: 100%;
 }
 
 .diff-hunk {
-    color: #00E5FF;
+    color: var(--info);
     font-weight: 600;
 }
 
 .diff-meta {
-    color: rgba(255, 255, 255, 0.3);
+    color: var(--text-muted);
     font-style: italic;
 }
 
@@ -664,24 +689,24 @@
 .detail-meta {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin: 12px 0;
-    padding: 12px;
-    background: rgba(255, 255, 255, 0.03);
-    border-radius: 8px;
-    font-size: 13px;
-    color: rgba(255, 255, 255, 0.6);
+    gap: 6px;
+    margin: 10px 0;
+    padding: 10px;
+    background: var(--bg-card);
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    color: var(--text-secondary);
 }
 
 .task-item {
-    padding: 4px 8px;
-    font-size: 13px;
-    color: rgba(255, 255, 255, 0.7);
+    padding: 3px 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
     border-radius: 4px;
 }
 
 .task-item.done {
-    color: var(--success, #00E676);
+    color: var(--success);
 }
 
 /* ── Animations ──────────────────────────────────── */

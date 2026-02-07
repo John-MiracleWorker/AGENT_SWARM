@@ -131,6 +131,9 @@ class GeminiClient:
         self._agent_usage: dict[str, TokenUsage] = {}
         self._current_model: str = MODEL_CASCADE[0]["name"]
 
+        # File context — injected file parts from Gemini Files API
+        self._file_context = None  # Set via set_file_context()
+
         # Budget cap
         self._budget_limit_usd: float = 1.00  # Default $1 budget
         self._budget_warning_sent: bool = False
@@ -188,8 +191,30 @@ class GeminiClient:
         # Budget check before making API call
         self._check_budget(agent_id)
 
-        # Build contents list from messages
+        # Build contents list — start with uploaded file context
         contents = []
+
+        # Inject uploaded codebase files for full project context
+        if self._file_context and self._file_context.is_ready:
+            file_parts = self._file_context.get_file_parts()
+            if file_parts:
+                file_summary = self._file_context.get_file_summary()
+                contents.append(types.Content(
+                    role="user",
+                    parts=file_parts + [
+                        types.Part.from_text(
+                            text=f"Above are the project source files uploaded for context.\n{file_summary}"
+                        )
+                    ],
+                ))
+                contents.append(types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(
+                        text="I've received and reviewed the project files. I'll use them as context for my responses."
+                    )],
+                ))
+
+        # Add conversation messages
         for msg in messages:
             role = "user" if msg["role"] == "user" else "model"
             contents.append(types.Content(
@@ -348,3 +373,7 @@ class GeminiClient:
     def set_budget_callback(self, callback):
         """Set a callback for budget events (for broadcasting to UI)."""
         self._on_budget_event = callback
+
+    def set_file_context(self, file_context):
+        """Attach a FileContextManager for codebase context injection."""
+        self._file_context = file_context

@@ -13,6 +13,10 @@
         rel="stylesheet">
     <link rel="stylesheet" href="/static/css/styles.css">
     <link rel="stylesheet" href="/static/css/features.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
 </head>
 
 <body>
@@ -55,7 +59,7 @@
             </div>
         </div>
 
-        <div class="mc-controls">
+        <div class="mc-controls" id="mission-controls">
             <div class="mc-token-display" id="token-display">
                 <span class="token-label">Tokens</span>
                 <span class="token-count" id="token-count">0</span>
@@ -119,7 +123,9 @@
         <aside id="code-panel" class="panel">
             <div class="panel-header">
                 <h2>Workspace</h2>
-                <button class="btn-refresh" id="btn-refresh-files" title="Refresh">🔄</button>
+                <div class="tab-group" id="code-tabs">
+                    <button class="btn-refresh" id="btn-refresh-files" title="Refresh">🔄</button>
+                </div>
             </div>
             <div class="panel-body code-panel-body">
                 <div class="file-tree" id="file-tree">
@@ -144,9 +150,15 @@
         <div class="bottom-content">
             <!-- Terminal Panel -->
             <div class="bottom-panel active" id="terminal-panel">
-                <div class="terminal-output" id="terminal-output">
-                    <div class="terminal-line terminal-system">Agent Swarm Terminal — Ready</div>
+                <div class="terminal-toolbar">
+                    <div class="terminal-tabs" id="terminal-tabs"></div>
+                    <div class="terminal-actions">
+                        <button class="terminal-btn" id="btn-new-terminal" title="New Terminal">＋</button>
+                        <button class="terminal-btn" id="btn-kill-terminal" title="Kill Terminal">✕</button>
+                        <button class="terminal-btn" id="btn-clear-terminal" title="Clear Terminal">🗑️</button>
+                    </div>
                 </div>
+                <div class="terminal-container" id="xterm-container"></div>
             </div>
 
             <!-- Tasks Panel -->

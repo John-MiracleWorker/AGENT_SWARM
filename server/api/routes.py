@@ -2,6 +2,7 @@
 REST API Routes — Mission management, file browsing, user intervention.
 """
 
+import asyncio
 import os
 import logging
 from pathlib import Path
@@ -61,6 +62,9 @@ def create_router(state) -> APIRouter:
         # Scan existing codebase
         codebase_summary = await state.context_manager.scan_codebase(state.workspace)
 
+        # Upload workspace files to Gemini Files API for full context
+        file_upload_result = await state.file_context.upload_workspace(str(workspace))
+
         # Create shared agent kwargs
         agent_kwargs = dict(
             gemini=state.gemini,
@@ -107,6 +111,7 @@ def create_router(state) -> APIRouter:
             "workspace": str(workspace),
             "agents": [a.get_status_dict() for a in state.agents.values()],
             "codebase_files": len(codebase_summary),
+            "file_context": file_upload_result,
         }
 
     @router.get("/missions/current")
@@ -409,6 +414,75 @@ def create_router(state) -> APIRouter:
     async def activate_workspace(workspace_id: str):
         """Switch active workspace."""
         state.switch_workspace(workspace_id)
+        # Re-upload files for new workspace
+        ws = state._workspaces.get(workspace_id)
+        if ws:
+            asyncio.create_task(state.file_context.upload_workspace(ws["path"]))
         return {"status": "switched", "active": workspace_id}
 
+    # --- File Context ---
+
+    @router.get("/file-context")
+    async def get_file_context():
+        """Get file upload status for Gemini Files API."""
+        return state.file_context.upload_status
+
+    @router.post("/file-context/upload")
+    async def upload_file_context(path: str = ""):
+        """Manually trigger file upload for a workspace path."""
+        workspace_path = path or (str(state.workspace.root) if state.workspace._root else "")
+        if not workspace_path:
+            raise HTTPException(400, "No workspace path provided")
+        result = await state.file_context.upload_workspace(workspace_path)
+        return result
+
+    @router.post("/file-context/refresh")
+    async def refresh_file(path: str):
+        """Re-upload a single changed file."""
+        await state.file_context.refresh_file(path)
+        return {"status": "refreshed", "path": path}
+
+    @router.delete("/file-context")
+    async def cleanup_file_context():
+        """Delete all uploaded files."""
+        await state.file_context.cleanup()
+        return {"status": "cleaned"}
+
+    # --- Terminal Sessions ---
+
+    @router.get("/terminal/sessions")
+    async def list_terminal_sessions():
+        """List active terminal sessions."""
+        return {"sessions": state.interactive_terminal.list_sessions()}
+
+    @router.delete("/terminal/sessions/{session_id}")
+    async def kill_terminal_session(session_id: str):
+        """Kill a specific terminal session."""
+        await state.interactive_terminal.kill_session(session_id)
+        return {"status": "killed", "session_id": session_id}
+
+    @router.delete("/terminal/sessions")
+    async def kill_all_terminal_sessions():
+        """Kill all terminal sessions."""
+        await state.interactive_terminal.kill_all()
+        return {"status": "all_killed"}
+
+    # --- Tools ---
+
+    @router.get("/tools")
+    async def list_tools():
+        """List all available tools."""
+        return {"tools": state.plugin_registry.list_tools()}
+
+    @router.get("/tools/categories")
+    async def list_tool_categories():
+        """List tool categories."""
+        return {"categories": state.plugin_registry.get_categories()}
+
+    @router.get("/tools/suggest")
+    async def suggest_tools(context: str = ""):
+        """Get intelligent tool suggestions for a context."""
+        return {"suggestions": state.plugin_registry.suggest_tools(context)}
+
     return router
+
