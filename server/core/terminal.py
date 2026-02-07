@@ -79,6 +79,8 @@ class TerminalExecutor:
 
             logger.info(f"Executing: {command} (cwd={cwd})")
 
+            proc_id: Optional[str] = None
+
             try:
                 process = await asyncio.create_subprocess_shell(
                     command,
@@ -146,7 +148,8 @@ class TerminalExecutor:
                     timed_out=False,
                 )
             finally:
-                self._active_processes.pop(proc_id, None)
+                if proc_id is not None:
+                    self._active_processes.pop(proc_id, None)
 
     async def kill_all(self):
         """Kill all active processes."""

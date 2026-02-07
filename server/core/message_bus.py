@@ -147,6 +147,13 @@ class MessageBus:
         logger.debug(f"[{sender}] {msg_type.value}: {content[:100]}")
         return msg
 
+
+    async def clear_runtime_state(self):
+        """Clear runtime message history and agent queues between missions."""
+        async with self._lock:
+            self._history.clear()
+        self._agent_queues.clear()
+
     def get_history(
         self,
         channel: Optional[str] = None,
