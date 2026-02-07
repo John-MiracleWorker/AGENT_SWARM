@@ -24,10 +24,10 @@ class BudgetExhaustedError(Exception):
 
 # Model cascade — ordered by preference. Falls back on rate limit / errors.
 MODEL_CASCADE = [
-    {"name": "gemini-3-flash-preview",          "rpm": 10, "cost_in": 0.15, "cost_out": 0.60},
-    {"name": "gemini-2.5-flash-preview-05-20",  "rpm": 10, "cost_in": 0.15, "cost_out": 0.60},
-    {"name": "gemini-2.5-pro-preview-05-06",    "rpm": 5,  "cost_in": 1.25, "cost_out": 10.00},
-    {"name": "gemini-2.0-flash",                "rpm": 15, "cost_in": 0.10, "cost_out": 0.40},
+    {"name": "gemini-3-flash",                   "rpm": 10, "cost_in": 0.15, "cost_out": 0.60},
+    {"name": "gemini-2.5-flash",                 "rpm": 10, "cost_in": 0.15, "cost_out": 0.60},
+    {"name": "gemini-2.5-pro",                   "rpm": 5,  "cost_in": 1.25, "cost_out": 10.00},
+    {"name": "gemini-2.0-flash",                 "rpm": 15, "cost_in": 0.10, "cost_out": 0.40},
 ]
 
 # Default cost estimates per 1M tokens
