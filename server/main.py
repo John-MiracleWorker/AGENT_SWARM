@@ -45,7 +45,7 @@ class SwarmState:
         if not api_key:
             logger.warning("GEMINI_API_KEY not set! Agents will fail to think.")
 
-        self.gemini = GeminiClient(api_key=api_key, max_rpm=10)
+        self.gemini = GeminiClient(api_key=api_key)
         self.message_bus = MessageBus()
         self.workspace = WorkspaceManager()
         self.task_manager = TaskManager()

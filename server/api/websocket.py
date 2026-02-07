@@ -16,19 +16,21 @@ _clients: set[WebSocket] = set()
 
 async def broadcast_to_clients(message: dict):
     """Broadcast a message to all connected WebSocket clients."""
+    global _clients
     if not _clients:
         return
 
     data = json.dumps(message)
     disconnected = set()
 
-    for ws in _clients:
+    for ws in _clients.copy():
         try:
             await ws.send_text(data)
         except Exception:
             disconnected.add(ws)
 
-    _clients -= disconnected
+    for ws in disconnected:
+        _clients.discard(ws)
 
 
 async def websocket_endpoint(websocket: WebSocket):

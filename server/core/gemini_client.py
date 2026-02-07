@@ -1,5 +1,6 @@
 """
-Gemini 3 Pro Client — Rate-limited async wrapper for the Google GenAI SDK.
+Gemini Client — Rate-limited async wrapper with intelligent model fallback.
+Automatically swaps between models when rate limits or errors are hit.
 All agents share a single request queue with configurable RPM/TPM limits.
 """
 
@@ -15,11 +16,17 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-MODEL_NAME = "gemini-3-pro-preview"
+# Model cascade — ordered by preference. Falls back on rate limit / errors.
+MODEL_CASCADE = [
+    {"name": "gemini-3-flash-preview",          "rpm": 10, "cost_in": 0.15, "cost_out": 0.60},
+    {"name": "gemini-2.5-flash-preview-05-20",  "rpm": 10, "cost_in": 0.15, "cost_out": 0.60},
+    {"name": "gemini-2.5-pro-preview-05-06",    "rpm": 5,  "cost_in": 1.25, "cost_out": 10.00},
+    {"name": "gemini-2.0-flash",                "rpm": 15, "cost_in": 0.10, "cost_out": 0.40},
+]
 
-# Cost estimates per 1M tokens (approximate)
-COST_PER_1M_INPUT = 1.25
-COST_PER_1M_OUTPUT = 5.00
+# Default cost estimates per 1M tokens
+COST_PER_1M_INPUT = 0.15
+COST_PER_1M_OUTPUT = 0.60
 
 
 @dataclass
@@ -48,13 +55,63 @@ class TokenUsage:
         }
 
 
+@dataclass
+class ModelState:
+    """Tracks per-model rate limit & health state."""
+    name: str
+    rpm_limit: int
+    request_times: list = field(default_factory=list)
+    cooldown_until: float = 0.0  # timestamp when cooldown expires
+    consecutive_errors: int = 0
+
+    @property
+    def is_cooled_down(self) -> bool:
+        return time.time() >= self.cooldown_until
+
+    def record_success(self):
+        self.consecutive_errors = 0
+        self.request_times.append(time.time())
+        # Prune old timestamps
+        cutoff = time.time() - 60
+        self.request_times = [t for t in self.request_times if t > cutoff]
+
+    def record_rate_limit(self):
+        """Back off this model for a while."""
+        self.consecutive_errors += 1
+        backoff = min(60 * (2 ** self.consecutive_errors), 300)  # max 5 min
+        self.cooldown_until = time.time() + backoff
+        logger.warning(f"Model {self.name} rate-limited, cooling down for {backoff}s")
+
+    def record_error(self):
+        self.consecutive_errors += 1
+        self.cooldown_until = time.time() + 10  # short cooldown on errors
+
+    @property
+    def requests_in_window(self) -> int:
+        cutoff = time.time() - 60
+        self.request_times = [t for t in self.request_times if t > cutoff]
+        return len(self.request_times)
+
+    @property
+    def has_capacity(self) -> bool:
+        return self.is_cooled_down and self.requests_in_window < self.rpm_limit
+
+    def wait_time(self) -> float:
+        """How long until this model has capacity."""
+        if not self.is_cooled_down:
+            return self.cooldown_until - time.time()
+        if self.requests_in_window >= self.rpm_limit:
+            return 60 - (time.time() - self.request_times[0]) + 0.1
+        return 0
+
+
 class GeminiClient:
     """
-    Async Gemini 3 Pro client with built-in rate limiting.
-    All agents share this single client instance.
+    Async Gemini client with intelligent model fallback.
+    Automatically rotates between models when rate limits are hit.
     """
 
-    def __init__(self, api_key: str, max_rpm: int = 10, max_retries: int = 3):
+    def __init__(self, api_key: str, max_retries: int = 3):
         self._api_key = api_key
         self.client = None
         if api_key:
@@ -62,24 +119,30 @@ class GeminiClient:
                 self.client = genai.Client(api_key=api_key)
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini client: {e}")
-        self.max_rpm = max_rpm
         self.max_retries = max_retries
-        self._request_times: list[float] = []
         self._queue_lock = asyncio.Lock()
         self._global_usage = TokenUsage()
         self._agent_usage: dict[str, TokenUsage] = {}
+        self._current_model: str = MODEL_CASCADE[0]["name"]
 
-    async def _wait_for_rate_limit(self):
-        """Enforce RPM limit by waiting if necessary."""
-        async with self._queue_lock:
-            now = time.time()
-            # Remove timestamps older than 60s
-            self._request_times = [t for t in self._request_times if now - t < 60]
-            if len(self._request_times) >= self.max_rpm:
-                wait_time = 60 - (now - self._request_times[0]) + 0.1
-                logger.info(f"Rate limit: waiting {wait_time:.1f}s")
-                await asyncio.sleep(wait_time)
-            self._request_times.append(time.time())
+        # Initialize model states
+        self._models: dict[str, ModelState] = {}
+        for m in MODEL_CASCADE:
+            self._models[m["name"]] = ModelState(
+                name=m["name"],
+                rpm_limit=m["rpm"],
+            )
+
+    def _pick_best_model(self) -> Optional[str]:
+        """Pick the best available model with capacity."""
+        for m in MODEL_CASCADE:
+            state = self._models[m["name"]]
+            if state.has_capacity:
+                if m["name"] != self._current_model:
+                    logger.info(f"🔄 Switching to model: {m['name']}")
+                self._current_model = m["name"]
+                return m["name"]
+        return None
 
     def _track_usage(self, agent_id: str, response):
         """Track token usage from response metadata."""
@@ -104,13 +167,11 @@ class GeminiClient:
         temperature: float = 0.7,
     ) -> dict:
         """
-        Generate a response from Gemini 3 Pro.
-        Returns parsed JSON action dict, or raw text wrapped in a dict.
+        Generate a response using the best available Gemini model.
+        Automatically falls back to other models on rate limit.
         """
         if not self.client:
             raise RuntimeError("Gemini client not initialized — set GEMINI_API_KEY in .env")
-
-        await self._wait_for_rate_limit()
 
         # Build contents list from messages
         contents = []
@@ -121,11 +182,27 @@ class GeminiClient:
                 parts=[types.Part.from_text(text=msg["content"])]
             ))
 
-        for attempt in range(self.max_retries):
+        last_error = None
+
+        for attempt in range(self.max_retries * len(MODEL_CASCADE)):
+            # Pick the best model with capacity
+            async with self._queue_lock:
+                model_name = self._pick_best_model()
+
+            if not model_name:
+                # All models exhausted — wait for the one with shortest cooldown
+                min_wait = min(s.wait_time() for s in self._models.values())
+                wait = max(min_wait, 1)
+                logger.warning(f"All models exhausted, waiting {wait:.1f}s")
+                await asyncio.sleep(wait)
+                continue
+
+            model_state = self._models[model_name]
+
             try:
                 response = await asyncio.to_thread(
                     self.client.models.generate_content,
-                    model=MODEL_NAME,
+                    model=model_name,
                     contents=contents,
                     config=types.GenerateContentConfig(
                         system_instruction=system_prompt,
@@ -134,31 +211,62 @@ class GeminiClient:
                     ),
                 )
 
+                model_state.record_success()
                 self._track_usage(agent_id, response)
 
                 # Parse JSON response
                 text = response.text.strip()
                 try:
-                    return json.loads(text)
+                    result = json.loads(text)
+                    logger.info(f"[{agent_id}] ✅ {model_name} responded")
+                    return result
                 except json.JSONDecodeError:
-                    # If Gemini didn't return valid JSON, wrap it
                     return {"thinking": "", "action": "message", "params": {}, "message": text}
 
             except Exception as e:
                 error_str = str(e)
+                last_error = e
+
                 if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
-                    wait = (2 ** attempt) * 2
-                    logger.warning(f"Rate limited (attempt {attempt+1}), waiting {wait}s")
-                    await asyncio.sleep(wait)
+                    model_state.record_rate_limit()
+                    logger.warning(f"[{agent_id}] 🔄 {model_name} rate-limited, trying next model...")
+                    continue  # will pick next model on next iteration
+
+                elif "403" in error_str or "PERMISSION_DENIED" in error_str:
+                    logger.error(f"[{agent_id}] 🔑 API key issue: {e}")
+                    raise  # can't recover from auth errors
+
                 elif "500" in error_str or "503" in error_str:
-                    wait = (2 ** attempt) * 1
-                    logger.warning(f"Server error (attempt {attempt+1}), retrying in {wait}s")
+                    model_state.record_error()
+                    wait = (2 ** (attempt % 3)) * 1
+                    logger.warning(f"[{agent_id}] Server error on {model_name}, retrying in {wait}s")
                     await asyncio.sleep(wait)
+                    continue
+
                 else:
-                    logger.error(f"Gemini error: {e}")
+                    logger.error(f"[{agent_id}] Gemini error: {e}")
                     raise
 
-        raise RuntimeError(f"Failed after {self.max_retries} retries")
+        raise RuntimeError(f"Failed after exhausting all models and retries: {last_error}")
+
+    @property
+    def active_model(self) -> str:
+        return self._current_model
+
+    def get_model_states(self) -> list[dict]:
+        """Get status of all models for the UI."""
+        return [
+            {
+                "name": s.name,
+                "active": s.name == self._current_model,
+                "has_capacity": s.has_capacity,
+                "requests_in_window": s.requests_in_window,
+                "rpm_limit": s.rpm_limit,
+                "cooled_down": s.is_cooled_down,
+                "cooldown_remaining": max(0, s.cooldown_until - time.time()),
+            }
+            for s in self._models.values()
+        ]
 
     def get_global_usage(self) -> dict:
         return self._global_usage.to_dict()
@@ -175,4 +283,6 @@ class GeminiClient:
                 aid: usage.to_dict()
                 for aid, usage in self._agent_usage.items()
             },
+            "active_model": self._current_model,
+            "models": self.get_model_states(),
         }

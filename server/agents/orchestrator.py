@@ -57,7 +57,7 @@ class OrchestratorAgent(BaseAgent):
             color="#FFD700",
             **kwargs,
         )
-        self._initial_goal_sent = False
+        self._goal_processed = False
 
     @property
     def system_prompt(self) -> str:
@@ -65,7 +65,8 @@ class OrchestratorAgent(BaseAgent):
         return ORCHESTRATOR_PROMPT + f"\n\n## Current Codebase\n{codebase}"
 
     def _should_act_without_messages(self) -> bool:
-        return not self._initial_goal_sent
+        # Act proactively when we have a goal that hasn't been processed yet
+        return not self._goal_processed and len(self._messages_history) > 0
 
     async def set_goal(self, goal: str):
         """Set the mission goal — triggers initial task decomposition."""
@@ -73,4 +74,11 @@ class OrchestratorAgent(BaseAgent):
             "role": "user",
             "content": f"[MISSION GOAL]: {goal}\n\nPlease analyze this goal, break it into tasks, and assign them to the team.",
         })
-        self._initial_goal_sent = True
+        # _goal_processed stays False so _should_act_without_messages triggers the loop
+
+    async def _think(self, new_messages):
+        """Override to mark goal as processed after first Gemini call."""
+        action = await super()._think(new_messages)
+        if action and not self._goal_processed:
+            self._goal_processed = True
+        return action
