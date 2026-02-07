@@ -13,6 +13,7 @@ from typing import Optional
 from server.agents.developer import DeveloperAgent
 from server.agents.reviewer import ReviewerAgent
 from server.agents.tester import TesterAgent
+from server.agents.researcher import ResearchAgent
 from server.agents.dynamic_agent import DynamicAgent
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ ROLE_LIMITS = {
     "senior_developer": 1,  # Expensive (gemini-3-pro), max one at a time
     "reviewer": 2,
     "tester": 2,
+    "researcher": 2,
     "dynamic": 4,  # max novel agents the orchestrator can create
 }
 
@@ -32,6 +34,7 @@ ROLE_CLASSES = {
     "senior_developer": DeveloperAgent,  # Same class, but pinned to Pro model
     "reviewer": ReviewerAgent,
     "tester": TesterAgent,
+    "researcher": ResearchAgent,
 }
 
 # Colors for spawned agent instances (cycle through these)
@@ -40,6 +43,7 @@ SPAWN_COLORS = {
     "senior_developer": ["#FFD700"],  # Gold for senior
     "reviewer": ["#AA00FF", "#9C27B0", "#7B1FA2"],
     "tester": ["#00E676", "#4CAF50", "#388E3C"],
+    "researcher": ["#4FC3F7", "#29B6F6", "#039BE5"],
 }
 
 SPAWN_EMOJIS = {
@@ -47,6 +51,7 @@ SPAWN_EMOJIS = {
     "senior_developer": ["🏆"],  # Trophy for senior
     "reviewer": ["🔍", "🧐", "📝"],
     "tester": ["🧪", "🔬", "✅"],
+    "researcher": ["🌐", "📚", "🧭"],
 }
 
 
@@ -257,12 +262,12 @@ class AgentSpawner:
         """
         Stop and remove a dynamically spawned agent.
 
-        Cannot kill core agents (orchestrator, developer, reviewer, tester).
+        Cannot kill core agents (orchestrator, developer, reviewer, tester, researcher).
         """
         from server.core.message_bus import MessageType
 
         # Protect core agents from being killed
-        core_agents = {"orchestrator", "developer", "reviewer", "tester"}
+        core_agents = {"orchestrator", "developer", "reviewer", "tester", "researcher"}
         if agent_id in core_agents:
             logger.warning(f"Cannot kill core agent: {agent_id}")
             return False

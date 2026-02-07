@@ -9,6 +9,7 @@ based on what they're currently doing.
 
 import logging
 import re
+import shlex
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -70,6 +71,24 @@ BUILTIN_TOOLS = [
         icon="🌳",
         tags=["structure", "layout", "directory", "project", "overview"],
         output_hint="Returns indented directory tree",
+    ),
+    Tool(
+        name="web_search",
+        description="Search the public web (DuckDuckGo HTML) and return top results",
+        command_template='python3 -m server.tools.web_research search --query "{query}" --max-results {max_results}',
+        category="research",
+        icon="🌐",
+        tags=["research", "web", "search", "docs", "reference"],
+        output_hint="Returns ranked result titles, URLs, and snippets",
+    ),
+    Tool(
+        name="fetch_url",
+        description="Fetch and extract readable text from an allowlisted URL",
+        command_template='python3 -m server.tools.web_research fetch --url "{url}" --max-chars {max_chars}',
+        category="research",
+        icon="📄",
+        tags=["research", "web", "url", "documentation", "spec"],
+        output_hint="Returns normalized page text for citation and summarization",
     ),
 
     # ── Code Quality ──
@@ -407,6 +426,11 @@ CONTEXT_TOOL_MAP = {
     "understanding": ["tree", "find_files", "grep", "count_lines", "head"],
     "exploring": ["tree", "find_files", "file_info", "grep", "count_lines"],
     "onboarding": ["tree", "count_lines", "deps_check", "find_files"],
+
+    # When researching external context
+    "research": ["web_search", "fetch_url", "grep", "find_files"],
+    "documentation": ["web_search", "fetch_url", "doc_check", "grep"],
+    "api": ["web_search", "fetch_url", "grep", "test"],
     
     # When deploying
     "deploying": ["test", "security_scan", "secret_scan", "build", "docker_build"],
@@ -467,20 +491,38 @@ class PluginRegistry:
         workspace: str,
         path: str = ".",
         pattern: str = "",
+        **kwargs,
     ) -> Optional[str]:
         """Build the actual command string for a tool invocation."""
         tool = self.get_tool(tool_name)
         if not tool:
             return None
         try:
+            query = str(kwargs.get("query", pattern)).replace('"', '\\"')
+            url = str(kwargs.get("url", path)).replace('"', '\\"')
+            max_results = int(kwargs.get("max_results", 5))
+            max_chars = int(kwargs.get("max_chars", 6000))
             return tool.command_template.format(
-                workspace=workspace,
-                path=path,
+                workspace=shlex.quote(workspace),
+                path=shlex.quote(path),
                 pattern=pattern,
+                query=query,
+                url=url,
+                max_results=max_results,
+                max_chars=max_chars,
             )
         except KeyError:
             # Template uses keys not provided — fill what we can
-            return tool.command_template.replace("{workspace}", workspace).replace("{path}", path).replace("{pattern}", pattern)
+            return (
+                tool.command_template
+                .replace("{workspace}", workspace)
+                .replace("{path}", path)
+                .replace("{pattern}", pattern)
+                .replace("{query}", str(kwargs.get("query", pattern)))
+                .replace("{url}", str(kwargs.get("url", path)))
+                .replace("{max_results}", str(kwargs.get("max_results", 5)))
+                .replace("{max_chars}", str(kwargs.get("max_chars", 6000)))
+            )
 
     # ──────────────────────────────────────────
     #  Intelligent Tool Selection
