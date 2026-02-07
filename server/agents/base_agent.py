@@ -346,7 +346,27 @@ class BaseAgent(ABC):
             if action_type == "write_file":
                 path = params.get("path", "")
                 content = params.get("content", "")
-                diff = await self.workspace.write_file(path, content)
+                # --- Layer 2: Block write_file on existing files ---
+                try:
+                    full = self.workspace._validate_path(path)
+                    if full.exists():
+                        logger.warning(
+                            f"[{self.agent_id}] Blocked write_file on existing file '{path}' — must use edit_file"
+                        )
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": (
+                                f"[System] ❌ Cannot use write_file on existing file '{path}'. "
+                                f"write_file OVERWRITES the entire file and destroys other changes. "
+                                f"Use edit_file instead to make targeted modifications. "
+                                f"First use read_file to see the current content, then use edit_file "
+                                f"with the exact 'search' text you want to change."
+                            ),
+                        })
+                        return
+                except Exception:
+                    pass  # If path validation fails, let write_file handle it
+                diff = await self.workspace.write_file(path, content, agent_id=self.agent_id)
                 await self.bus.publish(
                     sender=self.agent_id,
                     sender_role=self.role,
@@ -366,7 +386,7 @@ class BaseAgent(ABC):
                     })
                     return
                 try:
-                    diff = await self.workspace.edit_file(path, search, replace)
+                    diff = await self.workspace.edit_file(path, search, replace, agent_id=self.agent_id)
                     await self.bus.publish(
                         sender=self.agent_id,
                         sender_role=self.role,
@@ -382,7 +402,7 @@ class BaseAgent(ABC):
 
             elif action_type == "read_file":
                 path = params.get("path", "")
-                content = await self.workspace.read_file(path)
+                content = await self.workspace.read_file(path, agent_id=self.agent_id)
                 # Add file content to agent's context
                 self._messages_history.append({
                     "role": "user",

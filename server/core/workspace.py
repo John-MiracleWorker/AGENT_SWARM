@@ -1,9 +1,10 @@
 """
-Workspace Manager — Shared file workspace with locking and diff tracking.
-Agents operate in a user-selected directory with path validation.
+Workspace Manager — Shared file workspace with locking, diff tracking,
+and optimistic concurrency control to prevent agents from overwriting each other.
 """
 
 import asyncio
+import hashlib
 import os
 import difflib
 import logging
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Optional
 
 import aiofiles
+
+from server.core.file_tracker import FileTracker
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,13 @@ class WorkspaceManager:
         self._file_locks: dict[str, asyncio.Lock] = {}
         self._lock = asyncio.Lock()
         self._file_versions: dict[str, str] = {}  # path -> last content for diff
+
+        # Optimistic concurrency: track content hashes
+        self._file_hashes: dict[str, str] = {}          # path -> current hash on disk
+        self._agent_reads: dict[tuple, str] = {}         # (agent_id, path) -> hash when agent last read
+
+        # File activity tracker for conflict detection
+        self.file_tracker = FileTracker()
 
     def set_root(self, path: str):
         """Set the root working directory for this mission."""
@@ -57,18 +67,60 @@ class WorkspaceManager:
                 self._file_locks[path] = asyncio.Lock()
             return self._file_locks[path]
 
-    async def read_file(self, rel_path: str) -> str:
-        """Read a file from the workspace."""
+    @staticmethod
+    def _hash(content: str) -> str:
+        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()
+
+    async def read_file(self, rel_path: str, agent_id: str = "") -> str:
+        """Read a file from the workspace. Records a content hash for the agent."""
         full = self._validate_path(rel_path)
         if not full.exists():
             raise FileNotFoundError(f"File not found: {rel_path}")
         async with aiofiles.open(full, "r") as f:
-            return await f.read()
+            content = await f.read()
 
-    async def write_file(self, rel_path: str, content: str) -> dict:
+        # Record hash so we can detect stale writes later
+        h = self._hash(content)
+        self._file_hashes[rel_path] = h
+        if agent_id:
+            self._agent_reads[(agent_id, rel_path)] = h
+            self.file_tracker.record(agent_id, rel_path, "read")
+
+        return content
+
+    def _check_stale(self, agent_id: str, rel_path: str) -> Optional[str]:
+        """
+        Check if a file has been modified since the agent last read it.
+        Returns an error message if stale, None if OK.
+        """
+        if not agent_id:
+            return None  # No agent tracking, skip check
+
+        key = (agent_id, rel_path)
+        if key not in self._agent_reads:
+            # Agent never read this file — only allow if file doesn't exist (new file)
+            if rel_path in self._file_hashes:
+                return (
+                    f"You haven't read '{rel_path}' yet. "
+                    f"Use read_file first before modifying it."
+                )
+            return None  # New file, OK to write
+
+        agent_hash = self._agent_reads[key]
+        current_hash = self._file_hashes.get(rel_path)
+
+        if current_hash and agent_hash != current_hash:
+            return (
+                f"File '{rel_path}' was modified by another agent since you last read it. "
+                f"Use read_file to get the latest content before editing."
+            )
+        return None
+
+    async def write_file(self, rel_path: str, content: str, agent_id: str = "") -> dict:
         """
         Write a file to the workspace with locking.
         Creates a backup before overwriting existing files.
+        Checks for stale writes if agent_id is provided.
         Returns a diff dict showing what changed.
         """
         full = self._validate_path(rel_path)
@@ -90,6 +142,13 @@ class WorkspaceManager:
             async with aiofiles.open(full, "w") as f:
                 await f.write(content)
 
+            # Update hash tracking
+            new_hash = self._hash(content)
+            self._file_hashes[rel_path] = new_hash
+            if agent_id:
+                self._agent_reads[(agent_id, rel_path)] = new_hash
+                self.file_tracker.record(agent_id, rel_path, "write")
+
             # Generate diff
             diff = self._generate_diff(rel_path, old_content, content)
 
@@ -99,10 +158,11 @@ class WorkspaceManager:
             logger.info(f"Wrote file: {rel_path} ({len(content)} chars)")
             return diff
 
-    async def edit_file(self, rel_path: str, search: str, replace: str) -> dict:
+    async def edit_file(self, rel_path: str, search: str, replace: str, agent_id: str = "") -> dict:
         """
         Surgical inline edit — find `search` text in the file and replace with `replace`.
         Much safer than write_file as it only changes the targeted section.
+        Checks for stale writes if agent_id is provided.
         Returns a diff dict showing what changed.
         """
         full = self._validate_path(rel_path)
@@ -114,6 +174,11 @@ class WorkspaceManager:
 
             async with aiofiles.open(full, "r") as f:
                 old_content = await f.read()
+
+            # Check for stale write (file changed since agent last read it)
+            stale_msg = self._check_stale(agent_id, rel_path)
+            if stale_msg:
+                raise ValueError(stale_msg)
 
             # Validate search string exists
             if search not in old_content:
@@ -127,6 +192,14 @@ class WorkspaceManager:
             if count > 1:
                 logger.warning(f"edit_file: '{search[:50]}...' found {count} times in {rel_path}, replacing first occurrence")
 
+            # Warn if another agent recently modified this file
+            recent_writers = self.file_tracker.get_recent_writers(rel_path, exclude=agent_id)
+            if recent_writers:
+                logger.warning(
+                    f"⚠️ File conflict: {agent_id} editing '{rel_path}' "
+                    f"which was recently modified by: {', '.join(recent_writers)}"
+                )
+
             # Create backup before editing
             await self._backup_file(full, old_content)
 
@@ -136,6 +209,13 @@ class WorkspaceManager:
             # Write
             async with aiofiles.open(full, "w") as f:
                 await f.write(new_content)
+
+            # Update hash tracking
+            new_hash = self._hash(new_content)
+            self._file_hashes[rel_path] = new_hash
+            if agent_id:
+                self._agent_reads[(agent_id, rel_path)] = new_hash
+                self.file_tracker.record(agent_id, rel_path, "edit")
 
             # Generate diff
             diff = self._generate_diff(rel_path, old_content, new_content)

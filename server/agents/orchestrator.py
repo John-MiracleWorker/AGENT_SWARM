@@ -73,7 +73,9 @@ You MUST respond with valid JSON in this format:
 - Then IMMEDIATELY call `finalize_plan` in your second response
 - Each task should be small and specific (completable in one coding session)
 - Always specify clear acceptance criteria in task descriptions
-- Spawn extra developers when there are independent tasks that can be done in parallel
+- **FILE OWNERSHIP: Avoid assigning multiple agents tasks that modify the same files.** If two tasks must touch the same file, make one depend on the other so they run sequentially — never in parallel.
+- When assigning tasks, list the specific files each agent should work on in the task description
+- Spawn extra developers when there are independent tasks that can be done in parallel **on different files**
 - Kill spawned agents when they finish their work to free resources
 - When agents suggest new tasks, evaluate them and create via `create_task` if appropriate
 - When all tasks are done and tests pass, use action `done` to complete the mission
@@ -97,7 +99,13 @@ class OrchestratorAgent(BaseAgent):
     def system_prompt(self) -> str:
         codebase = self.context.get_codebase_summary()
         planning_status = "⏳ PLANNING — Create all tasks now!" if not self.tasks.planning_complete else "✅ Plan finalized — monitor and coordinate"
-        return ORCHESTRATOR_PROMPT + f"\n\n## Planning Status\n{planning_status}\n\n## Current Codebase\n{codebase}"
+        file_activity = self.workspace.file_tracker.get_activity_summary()
+        return (
+            ORCHESTRATOR_PROMPT
+            + f"\n\n## Planning Status\n{planning_status}"
+            + f"\n\n## Recent File Activity\n{file_activity}"
+            + f"\n\n## Current Codebase\n{codebase}"
+        )
 
     def _should_act_without_messages(self) -> bool:
         # Act proactively when we have a goal that hasn't been processed yet
