@@ -348,20 +348,86 @@ class BaseAgent(ABC):
                 })
 
             elif action_type == "create_task":
-                task = self.tasks.create_task(
-                    title=params.get("title", ""),
-                    description=params.get("description", ""),
-                    created_by=self.agent_id,
-                    assignee=params.get("assignee"),
-                    tags=params.get("tags", []),
-                )
+                # Only orchestrator can create tasks
+                if self.role != "Orchestrator":
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": "[System] Only the Orchestrator can create tasks. Use `suggest_task` to suggest tasks to the Orchestrator.",
+                    })
+                else:
+                    task = self.tasks.create_task(
+                        title=params.get("title", ""),
+                        description=params.get("description", ""),
+                        created_by=self.agent_id,
+                        assignee=params.get("assignee"),
+                        tags=params.get("tags", []),
+                    )
+                    await self.bus.publish(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.TASK_ASSIGNED,
+                        content=f"Created task: {task.title}",
+                        data=task.to_dict(),
+                        mentions=[params.get("assignee", "")],
+                    )
+
+            elif action_type == "create_tasks":
+                # Batch task creation — orchestrator only
+                if self.role != "Orchestrator":
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": "[System] Only the Orchestrator can create tasks.",
+                    })
+                else:
+                    task_list = params.get("tasks", [])
+                    created = []
+                    for t in task_list:
+                        task = self.tasks.create_task(
+                            title=t.get("title", ""),
+                            description=t.get("description", ""),
+                            created_by=self.agent_id,
+                            assignee=t.get("assignee"),
+                            tags=t.get("tags", []),
+                        )
+                        created.append(task)
+                    # Broadcast all tasks at once
+                    await self.bus.publish(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.TASK_ASSIGNED,
+                        content=f"📋 Created {len(created)} tasks for the mission",
+                        data={"tasks": [t.to_dict() for t in created]},
+                    )
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[System] Successfully created {len(created)} tasks. Now call `finalize_plan` to enable completion checks.",
+                    })
+
+            elif action_type == "finalize_plan":
+                # Orchestrator signals planning is complete
+                if self.role != "Orchestrator":
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": "[System] Only the Orchestrator can finalize the plan.",
+                    })
+                else:
+                    self.tasks.mark_planning_complete()
+                    await self.bus.publish(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.SYSTEM,
+                        content=f"📋 Plan finalized with {len(self.tasks.list_tasks())} tasks — agents can now work!",
+                    )
+
+            elif action_type == "suggest_task":
+                # Non-orchestrator agents suggest tasks to the orchestrator
                 await self.bus.publish(
                     sender=self.agent_id,
                     sender_role=self.role,
-                    msg_type=MessageType.TASK_ASSIGNED,
-                    content=f"Created task: {task.title}",
-                    data=task.to_dict(),
-                    mentions=[params.get("assignee", "")],
+                    msg_type=MessageType.CHAT,
+                    content=f"💡 Task suggestion: {params.get('title', '')}\nReason: {params.get('reason', message)}",
+                    data={"suggestion": params},
+                    mentions=["orchestrator"],
                 )
 
             elif action_type == "update_task":
@@ -379,7 +445,18 @@ class BaseAgent(ABC):
                     )
                     # Check if all tasks are now complete → auto-stop
                     if status == TaskStatus.DONE and self.tasks.all_done:
-                        await self._trigger_mission_complete()
+                        # Only orchestrator can actually trigger completion
+                        if self.role == "Orchestrator":
+                            await self._trigger_mission_complete()
+                        else:
+                            # Notify orchestrator that all tasks appear done
+                            await self.bus.publish(
+                                sender=self.agent_id,
+                                sender_role=self.role,
+                                msg_type=MessageType.CHAT,
+                                content="🏁 All tasks appear to be done! Orchestrator, please verify and use `done` to complete the mission.",
+                                mentions=["orchestrator"],
+                            )
 
             elif action_type == "request_review":
                 await self.bus.publish(
@@ -562,8 +639,14 @@ class BaseAgent(ABC):
                     })
 
             elif action_type == "done":
-                # Orchestrator signals mission complete
-                await self._trigger_mission_complete()
+                # Only orchestrator can signal mission complete
+                if self.role != "Orchestrator":
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": "[System] Only the Orchestrator can complete the mission. Notify the orchestrator that you believe the mission is done.",
+                    })
+                else:
+                    await self._trigger_mission_complete()
 
             elif action_type == "message":
                 # Just a chat message, no file action

@@ -53,6 +53,7 @@ class TaskManager:
 
     def __init__(self):
         self._tasks: dict[str, Task] = {}
+        self.planning_complete: bool = False
 
     def create_task(
         self,
@@ -124,9 +125,16 @@ class TaskManager:
         """Whether any tasks have been created."""
         return len(self._tasks) > 0
 
+    def mark_planning_complete(self):
+        """Called by orchestrator after all initial tasks are created."""
+        self.planning_complete = True
+        logger.info("📋 Planning phase complete — completion checks enabled")
+
     @property
     def all_done(self) -> bool:
-        """Check if all tasks are complete."""
+        """Check if all tasks are complete. Only valid after planning is finalized."""
+        if not self.planning_complete:
+            return False
         if not self._tasks:
             return False
         return all(t.status == TaskStatus.DONE for t in self._tasks.values())
@@ -134,4 +142,5 @@ class TaskManager:
     def clear(self):
         """Clear all tasks for a new mission."""
         self._tasks.clear()
+        self.planning_complete = False
 
