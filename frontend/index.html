@@ -204,6 +204,27 @@
         </div>
     </div>
 
+    <!-- Confirm Dialog (replaces browser confirm() to avoid auto-dismiss) -->
+    <div class="modal-overlay hidden" id="confirm-modal">
+        <div class="modal glass-panel" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3 id="confirm-modal-title">⚠️ Confirm Action</h3>
+            </div>
+            <div class="modal-body" style="padding: 16px;">
+                <p id="confirm-modal-message" style="color: var(--text-secondary); font-size: 14px; margin: 0;">
+                    Are you sure?
+                </p>
+            </div>
+            <div class="modal-footer" style="display: flex; gap: 8px; justify-content: flex-end;">
+                <button class="btn-select-folder" id="confirm-cancel"
+                    style="background: rgba(255,255,255,0.05); color: var(--text-muted);">Cancel</button>
+                <button class="btn-select-folder" id="confirm-ok"
+                    style="background: rgba(248,113,113,0.15); color: var(--danger); border-color: rgba(248,113,113,0.3);">
+                    Stop Mission</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Scripts -->
     <script src="/static/js/websocket.js"></script>
     <script src="/static/js/agents-panel.js"></script>

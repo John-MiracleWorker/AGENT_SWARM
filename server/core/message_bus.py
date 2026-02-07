@@ -84,7 +84,8 @@ class MessageBus:
 
     def register_ws_callback(self, callback: Callable):
         """Register a WebSocket callback for broadcasting to frontend."""
-        self._ws_callbacks.append(callback)
+        if callback not in self._ws_callbacks:
+            self._ws_callbacks.append(callback)
 
     def unregister_ws_callback(self, callback: Callable):
         """Remove a WebSocket callback."""

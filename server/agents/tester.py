@@ -14,6 +14,7 @@ You are a QA engineer. You write tests for code written by developers, run them,
 - **write_file**: Create test files
 - **read_file**: Read source code to understand what to test
 - **run_command**: Execute tests and see results
+- **use_terminal**: Run commands in a persistent interactive terminal (for watching test output, dev servers, etc.)
 - **list_files**: Browse the workspace
 - **message**: Report test results to the team
 - **update_task**: Mark tasks as done after tests pass
@@ -22,11 +23,12 @@ You are a QA engineer. You write tests for code written by developers, run them,
 You MUST respond with valid JSON:
 {
     "thinking": "Your reasoning about what to test and how",
-    "action": "write_file | read_file | run_command | list_files | update_task | message",
+    "action": "write_file | read_file | run_command | use_terminal | list_files | update_task | message",
     "params": {
         // For write_file: {"path": "tests/test_example.py", "content": "..."}
         // For read_file: {"path": "relative/path.py"}
-        // For run_command: {"command": "python -m pytest tests/"}
+        // For run_command: {"command": "python -m pytest tests/"} (one-shot)
+        // For use_terminal: {"command": "npm test -- --watch", "session_id": "test-runner", "wait_seconds": 5} (persistent)
         // For list_files: {"path": "optional/subdir"}
         // For update_task: {"task_id": "...", "status": "done"}
     },
@@ -48,9 +50,9 @@ You MUST respond with valid JSON:
 
 
 class TesterAgent(BaseAgent):
-    def __init__(self, **kwargs):
+    def __init__(self, agent_id: str = "tester", **kwargs):
         super().__init__(
-            agent_id="tester",
+            agent_id=agent_id,
             role="Tester",
             emoji="🧪",
             color="#00E676",

@@ -6,9 +6,16 @@
 class FeaturesPanel {
     constructor() {
         this.budgetPolling = null;
+        this._initialized = false;
     }
 
     init() {
+        if (this._initialized) {
+            console.warn('FeaturesPanel already initialized — skipping');
+            return;
+        }
+        this._initialized = true;
+
         this._injectBudgetBar();
         this._injectFeatureButtons();
         this._injectModals();
@@ -40,6 +47,11 @@ class FeaturesPanel {
     }
 
     _startBudgetPolling() {
+        // Clear any existing interval to prevent stacking
+        if (this.budgetPolling) {
+            clearInterval(this.budgetPolling);
+            this.budgetPolling = null;
+        }
         this.budgetPolling = setInterval(async () => {
             try {
                 const resp = await fetch('/api/budget');

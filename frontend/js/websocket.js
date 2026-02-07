@@ -14,6 +14,20 @@ class SwarmWebSocket {
     }
 
     connect() {
+        // Close existing connection if any (prevent duplicates on reconnect)
+        if (this.ws) {
+            try {
+                this.ws.onclose = null; // Prevent triggering reconnect again
+                this.ws.onerror = null;
+                this.ws.onmessage = null;
+                this.ws.onopen = null;
+                if (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) {
+                    this.ws.close();
+                }
+            } catch (e) { /* ignore */ }
+            this.ws = null;
+        }
+
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const url = `${protocol}//${location.host}/ws`;
 

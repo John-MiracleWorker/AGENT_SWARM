@@ -8,9 +8,17 @@ class App {
         this.missionActive = false;
         this.selectedFolder = '';
         this.tokenUpdateInterval = null;
+        this._initialized = false;
     }
 
     init() {
+        // Guard against double initialization
+        if (this._initialized) {
+            console.warn('🐝 App already initialized — skipping');
+            return;
+        }
+        this._initialized = true;
+
         // Initialize all panels
         agentsPanel.init();
         chatPanel.init();
@@ -154,7 +162,13 @@ class App {
     }
 
     async stopMission() {
-        if (!confirm('Stop the mission? All agents will be halted.')) return;
+        // Use custom modal instead of confirm() which gets auto-dismissed by WS activity
+        const confirmed = await this._showConfirmDialog(
+            '🛑 Stop Mission',
+            'Stop the mission? All agents will be halted.',
+            'Stop Mission'
+        );
+        if (!confirmed) return;
 
         try {
             await fetch('/api/missions/stop', { method: 'POST' });
@@ -177,6 +191,33 @@ class App {
         } catch (e) {
             console.error('Stop failed:', e);
         }
+    }
+
+    _showConfirmDialog(title, message, actionLabel = 'Confirm') {
+        return new Promise((resolve) => {
+            const overlay = document.getElementById('confirm-modal');
+            document.getElementById('confirm-modal-title').textContent = title;
+            document.getElementById('confirm-modal-message').textContent = message;
+            document.getElementById('confirm-ok').textContent = actionLabel;
+            overlay.classList.remove('hidden');
+
+            const cleanup = () => {
+                overlay.classList.add('hidden');
+                okBtn.removeEventListener('click', onOk);
+                cancelBtn.removeEventListener('click', onCancel);
+                overlay.removeEventListener('click', onOverlay);
+            };
+
+            const onOk = () => { cleanup(); resolve(true); };
+            const onCancel = () => { cleanup(); resolve(false); };
+            const onOverlay = (e) => { if (e.target === overlay) { cleanup(); resolve(false); } };
+
+            const okBtn = document.getElementById('confirm-ok');
+            const cancelBtn = document.getElementById('confirm-cancel');
+            okBtn.addEventListener('click', onOk);
+            cancelBtn.addEventListener('click', onCancel);
+            overlay.addEventListener('click', onOverlay);
+        });
     }
 
     async sendMessage() {

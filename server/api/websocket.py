@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Connected WebSocket clients for event stream
 _clients: set[WebSocket] = set()
+_broadcast_registered = False
 
 
 async def broadcast_to_clients(message: dict):
@@ -39,13 +40,16 @@ async def broadcast_to_clients(message: dict):
 
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time event streaming."""
+    global _broadcast_registered
     await websocket.accept()
     _clients.add(websocket)
     logger.info(f"WebSocket client connected ({len(_clients)} total)")
 
-    # Register the broadcast callback with the message bus
+    # Register the broadcast callback ONCE, not per-connection
     from server.main import state
-    state.message_bus.register_ws_callback(broadcast_to_clients)
+    if not _broadcast_registered:
+        state.message_bus.register_ws_callback(broadcast_to_clients)
+        _broadcast_registered = True
 
     try:
         # Send initial state

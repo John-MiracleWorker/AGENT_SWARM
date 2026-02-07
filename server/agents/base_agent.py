@@ -74,6 +74,7 @@ class BaseAgent(ABC):
         self._loop_task: Optional[asyncio.Task] = None
         self._consecutive_errors: int = 0
         self._error_backoff: float = 1.0
+        self._last_thinking_broadcast: float = 0  # throttle thought broadcasts
 
     @property
     @abstractmethod
@@ -147,8 +148,8 @@ class BaseAgent(ABC):
                 self._consecutive_errors = 0
                 self._error_backoff = 1.0
 
-                # Small delay to prevent tight loops
-                await asyncio.sleep(1)
+                # Delay between cycles to prevent tight loops
+                await asyncio.sleep(3)
 
             except asyncio.CancelledError:
                 break
@@ -234,13 +235,17 @@ class BaseAgent(ABC):
         # Trim context if needed
         trimmed = self.context.trim_messages(self._messages_history)
 
-        # Broadcast thinking bubble
-        await self.bus.publish(
-            sender=self.agent_id,
-            sender_role=self.role,
-            msg_type=MessageType.THOUGHT,
-            content="Analyzing context and deciding next action...",
-        )
+        # Broadcast thinking bubble (throttled — max once per 10s)
+        import time as _time
+        now = _time.time()
+        if now - self._last_thinking_broadcast >= 10:
+            self._last_thinking_broadcast = now
+            await self.bus.publish(
+                sender=self.agent_id,
+                sender_role=self.role,
+                msg_type=MessageType.THOUGHT,
+                content="Analyzing context and deciding next action...",
+            )
 
         try:
             action = await self.gemini.generate(
@@ -443,6 +448,118 @@ class BaseAgent(ABC):
                         })
                 except ImportError:
                     pass
+
+            elif action_type == "spawn_agent":
+                # Dynamically spawn a new agent
+                role = params.get("role", "")
+                reason = params.get("reason", "")
+                try:
+                    from server.main import state as app_state
+                    result = await app_state.agent_spawner.spawn_agent(
+                        role=role,
+                        reason=reason,
+                        state=app_state,
+                    )
+                    if result:
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[System] Successfully spawned agent: {result['id']} (role={role}). "
+                                       f"You can now assign tasks to '{result['id']}'.",
+                        })
+                    else:
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[System] Could not spawn {role} agent — at max capacity.",
+                        })
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] Spawn failed: {e}")
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[System] Failed to spawn agent: {str(e)[:200]}",
+                    })
+
+            elif action_type == "kill_agent":
+                # Remove a dynamically spawned agent
+                target_id = params.get("agent_id", "")
+                try:
+                    from server.main import state as app_state
+                    success = await app_state.agent_spawner.kill_agent(
+                        agent_id=target_id,
+                        state=app_state,
+                    )
+                    if success:
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[System] Agent '{target_id}' has been removed from the team.",
+                        })
+                    else:
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[System] Cannot remove agent '{target_id}' — not found or is a core agent.",
+                        })
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] Kill agent failed: {e}")
+
+            elif action_type == "use_terminal":
+                # Interact with the interactive PTY terminal
+                command = params.get("command", "")
+                session_id = params.get("session_id", f"agent-{self.agent_id}")
+                wait_seconds = min(params.get("wait_seconds", 3), 10)
+                try:
+                    from server.main import state as app_state
+                    terminal = app_state.interactive_terminal
+
+                    # Create session if it doesn't exist
+                    if session_id not in terminal._sessions:
+                        await terminal.create_session(
+                            session_id=session_id,
+                            cwd=str(self.workspace.root),
+                        )
+
+                    # Capture output via a collector
+                    output_chunks = []
+
+                    def _collect(data):
+                        output_chunks.append(data)
+
+                    old_cb = terminal._output_callbacks.get(session_id)
+                    terminal._output_callbacks[session_id] = _collect
+
+                    # Write the command + Enter
+                    await terminal.write_input(session_id, command + "\n")
+
+                    # Wait for output
+                    await asyncio.sleep(wait_seconds)
+
+                    # Restore old callback
+                    if old_cb:
+                        terminal._output_callbacks[session_id] = old_cb
+                    else:
+                        terminal._output_callbacks.pop(session_id, None)
+
+                    output = "".join(output_chunks)[:5000]
+
+                    # Broadcast terminal activity
+                    await self.bus.publish(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.TERMINAL_OUTPUT,
+                        content=f"[Terminal:{session_id}] $ {command}",
+                        data={"stdout": output, "session_id": session_id},
+                    )
+
+                    # Feed output back to agent
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[Terminal session '{session_id}' output for `{command}`]:\n{output[:3000]}",
+                    })
+
+                except Exception as e:
+                    logger.error(f"[{self.agent_id}] use_terminal failed: {e}")
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[Terminal error]: {str(e)[:300]}",
+                    })
 
             elif action_type == "done":
                 # Orchestrator signals mission complete

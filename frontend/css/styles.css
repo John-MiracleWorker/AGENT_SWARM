@@ -628,6 +628,75 @@ body {
     }
 }
 
+/* Agent spawn/kill animations */
+.agent-card-spawning {
+    animation: agent-spawn 0.5s ease-out;
+}
+
+.agent-card-removing {
+    animation: agent-kill 0.4s ease-in forwards;
+}
+
+@keyframes agent-spawn {
+    0% {
+        transform: scale(0.8);
+        opacity: 0;
+    }
+
+    50% {
+        transform: scale(1.03);
+        opacity: 0.8;
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+@keyframes agent-kill {
+    0% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    100% {
+        transform: scale(0.8) translateX(-10px);
+        opacity: 0;
+        height: 0;
+        padding: 0;
+        margin: 0;
+        overflow: hidden;
+    }
+}
+
+/* Kill button for spawned agents */
+.agent-kill-btn {
+    background: transparent;
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    color: var(--danger);
+    font-size: 10px;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: 4px;
+    opacity: 0;
+    transition: opacity 0.2s, background 0.2s;
+}
+
+.agent-card:hover .agent-kill-btn {
+    opacity: 1;
+}
+
+.agent-kill-btn:hover {
+    background: rgba(248, 113, 113, 0.15);
+    border-color: var(--danger);
+}
+
 /* Thought bubble */
 .agent-thought {
     margin-top: 6px;

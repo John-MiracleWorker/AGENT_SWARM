@@ -200,6 +200,44 @@ def create_router(state) -> APIRouter:
 
         return {"status": "sent"}
 
+    # ── Agent Management ──────────────────────────────────
+
+    @router.get("/agents")
+    async def list_agents():
+        """List all active agents and spawn capacity."""
+        return {
+            "agents": [a.get_status_dict() for a in state.agents.values()],
+            "spawn_info": state.agent_spawner.get_spawn_info(state.agents),
+        }
+
+    @router.post("/agents/spawn")
+    async def spawn_agent(role: str, reason: str = "Manual spawn"):
+        """Manually spawn a new agent of a given role."""
+        if not state.mission_active:
+            raise HTTPException(400, "No active mission — cannot spawn agents")
+
+        result = await state.agent_spawner.spawn_agent(
+            role=role,
+            reason=reason,
+            state=state,
+        )
+        if not result:
+            raise HTTPException(400, f"Cannot spawn {role} — at max capacity")
+
+        return {"status": "spawned", "agent": result}
+
+    @router.post("/agents/{agent_id}/kill")
+    async def kill_agent(agent_id: str):
+        """Remove a dynamically spawned agent."""
+        success = await state.agent_spawner.kill_agent(
+            agent_id=agent_id,
+            state=state,
+        )
+        if not success:
+            raise HTTPException(400, f"Cannot kill agent '{agent_id}' — not found or is a core agent")
+
+        return {"status": "killed", "agent_id": agent_id}
+
     @router.post("/missions/approve/{approval_id}")
     async def approve_action(approval_id: str, req: ApprovalAction):
         """Approve or reject a pending action."""

@@ -28,6 +28,7 @@ from server.core.agent_memory import AgentMemory
 from server.core.plugin_registry import PluginRegistry
 from server.core.file_context import FileContextManager
 from server.core.pty_terminal import InteractiveTerminal
+from server.core.agent_spawner import AgentSpawner
 from server.api.routes import create_router
 from server.api.websocket import websocket_endpoint, terminal_websocket_endpoint
 
@@ -64,6 +65,7 @@ class SwarmState:
         self.plugin_registry = PluginRegistry()
         self.file_context = FileContextManager(client=self.gemini.client)
         self.interactive_terminal = InteractiveTerminal()
+        self.agent_spawner = AgentSpawner()
 
         # Connect file context to Gemini client for auto-injection
         self.gemini.set_file_context(self.file_context)
@@ -158,5 +160,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=True,
+        reload_excludes=["frontend/*", "*.css", "*.js", "*.html"],
         log_level="info",
     )

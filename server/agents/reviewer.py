@@ -53,9 +53,9 @@ You MUST respond with valid JSON:
 
 
 class ReviewerAgent(BaseAgent):
-    def __init__(self, **kwargs):
+    def __init__(self, agent_id: str = "reviewer", **kwargs):
         super().__init__(
-            agent_id="reviewer",
+            agent_id=agent_id,
             role="Reviewer",
             emoji="🔍",
             color="#AA00FF",
