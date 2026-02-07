@@ -863,7 +863,34 @@ class BaseAgent(ABC):
                         "content": "[System] Only the Orchestrator can complete the mission. Notify the orchestrator that you believe the mission is done.",
                     })
                 else:
-                    await self._trigger_mission_complete()
+                    # Guard: check if all tasks are actually done
+                    summary = self.tasks.get_summary()
+                    open_todo = summary.get("todo", 0)
+                    open_progress = summary.get("in_progress", 0)
+                    if open_todo > 0 or open_progress > 0:
+                        # Build list of incomplete tasks for feedback
+                        incomplete = [
+                            t for t in self.tasks.list_tasks()
+                            if t.get("status") in ("todo", "in_progress")
+                        ]
+                        task_list = "\n".join(
+                            f"  - [{t.get('status')}] {t.get('title', 'Untitled')}"
+                            for t in incomplete
+                        )
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": (
+                                f"[System] ❌ Cannot complete mission — {open_todo} todo and "
+                                f"{open_progress} in-progress task(s) remain:\n{task_list}\n\n"
+                                f"Wait for all tasks to finish, or cancel/complete them first."
+                            ),
+                        })
+                        logger.warning(
+                            f"[{self.agent_id}] Mission completion blocked: "
+                            f"{open_todo} todo, {open_progress} in_progress"
+                        )
+                    else:
+                        await self._trigger_mission_complete()
 
             elif action_type == "message":
                 # Just a chat message, no file action
@@ -950,20 +977,54 @@ class BaseAgent(ABC):
             from server.core.project_reviewer import run_review_loop
 
             async def on_new_tasks(issues):
-                """Create tasks from review issues and re-activate agents."""
-                for issue in issues:
-                    self.tasks.add_task(
-                        title=f"[Review] {issue.get('title', 'Fix issue')}",
-                        description=issue.get("description", ""),
-                        assignee=issue.get("assignee", "developer"),
+                """Route review issues through the orchestrator for proper task planning."""
+                # Format issues into a clear message for the orchestrator
+                issue_lines = []
+                for i, issue in enumerate(issues, 1):
+                    sev = issue.get("severity", "unknown")
+                    title = issue.get("title", "Unnamed issue")
+                    desc = issue.get("description", "")
+                    file_path = issue.get("file", "")
+                    issue_lines.append(
+                        f"  {i}. [{sev.upper()}] {title}"
+                        + (f" — {file_path}" if file_path else "")
+                        + (f"\n     {desc}" if desc else "")
                     )
-                # Broadcast updated tasks
+                issues_text = "\n".join(issue_lines)
+
+                # Re-start stopped agents so they can work on the fixes
+                for agent in state.agents.values():
+                    if not agent._running:
+                        await agent.start()
+                        logger.info(f"♻️ Restarted {agent.agent_id} for review fix cycle")
+
+                # Send the review feedback directly to the orchestrator
+                orchestrator = state.agents.get("orchestrator")
+                if orchestrator:
+                    orchestrator._goal_processed = False  # Allow it to act proactively
+                    await orchestrator.inject_message(
+                        f"[REVIEW FEEDBACK — NEEDS CHANGES]\n"
+                        f"The post-completion review found {len(issues)} issue(s) that must be fixed:\n"
+                        f"{issues_text}\n\n"
+                        f"Create new tasks to address ALL issues above. Assign clear file ownership. "
+                        f"Once all fix tasks are done, the system will re-review automatically."
+                    )
+                else:
+                    # Fallback: create tasks directly if orchestrator is missing
+                    for issue in issues:
+                        self.tasks.add_task(
+                            title=f"[Review] {issue.get('title', 'Fix issue')}",
+                            description=issue.get("description", ""),
+                            assignee=issue.get("assignee", "developer"),
+                        )
+
+                # Broadcast that review cycle is starting
                 await self.bus.publish(
                     sender=self.agent_id,
                     sender_role=self.role,
                     msg_type=MessageType.TASK_ASSIGNED,
-                    content="Review found issues — new tasks created",
-                    data={"tasks": self.tasks.list_tasks()},
+                    content=f"🔄 Review found {len(issues)} issue(s) — orchestrator is creating fix tasks",
+                    data={"issues": issues},
                 )
 
             review = await run_review_loop(state, self.tasks, self.bus, on_new_tasks=on_new_tasks)

@@ -136,8 +136,8 @@ async def review_project(state, tasks, bus):
         ]
         model_name = None
         for m in GEMINI_REVIEW_MODELS:
-            model_info = state.gemini._models.get(m)
-            if model_info and model_info.get("available", False):
+            model_state = state.gemini._models.get(m)
+            if model_state and model_state.is_cooled_down:
                 model_name = m
                 break
         if not model_name:
