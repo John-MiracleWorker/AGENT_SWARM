@@ -25,6 +25,15 @@ MAX_CONSECUTIVE_ERRORS = 5
 RETRY_BACKOFF_BASE = 2
 MAX_RETRY_ATTEMPTS = 3
 
+# ─── Role-based file operation enforcement ─────────────────────
+# Roles that are allowed to perform write operations (edit_file, write_file)
+WRITE_ROLES = {"Developer", "Orchestrator"}
+# Tester can write, but ONLY to files matching these patterns
+TESTER_WRITE_ALLOWED = True
+TESTER_WRITE_PATTERNS = ("test_", "tests/", "spec/", "__tests__/", "_test.", ".test.")
+# Reviewer is NEVER allowed to write files
+REVIEWER_WRITE_ALLOWED = False
+
 
 class AgentStatus(str, Enum):
     IDLE = "idle"
@@ -317,6 +326,45 @@ class BaseAgent(ABC):
             logger.error(f"[{self.agent_id}] Think failed: {e}")
             return None
 
+    def _check_write_permission(self, action_type: str, path: str) -> Optional[str]:
+        """
+        Check if this agent's role is allowed to perform a write operation.
+        Returns an error message if blocked, None if allowed.
+        """
+        # Developers and Orchestrators have full write access
+        if self.role in WRITE_ROLES:
+            return None
+
+        # Reviewer — NEVER allowed to write
+        if self.role == "Reviewer":
+            return (
+                f"❌ As a Reviewer, you cannot use '{action_type}'. "
+                f"Your role is to READ and REVIEW code, then use 'suggest_task' "
+                f"to ask the Orchestrator to create fix tasks for the Developer."
+            )
+
+        # Tester — can only write test files
+        if self.role == "Tester":
+            if not any(pattern in path for pattern in TESTER_WRITE_PATTERNS):
+                return (
+                    f"❌ As a Tester, you can only write TEST files "
+                    f"(paths containing: {', '.join(TESTER_WRITE_PATTERNS)}). "
+                    f"'{path}' is a production file. Use 'suggest_task' to ask "
+                    f"the Orchestrator to create a fix task for the Developer."
+                )
+            return None
+
+        # Dynamic agents — check their capability set
+        # (DynamicAgent stores available actions in _available_actions)
+        if hasattr(self, '_available_actions'):
+            if action_type not in self._available_actions:
+                return (
+                    f"❌ Action '{action_type}' is not in your capability set. "
+                    f"Available actions: {', '.join(sorted(self._available_actions))}"
+                )
+
+        return None
+
     async def _act(self, action: dict):
         """Execute a structured action from Gemini."""
         action_type = action.get("action", "message")
@@ -324,6 +372,18 @@ class BaseAgent(ABC):
         message = action.get("message", "")
 
         try:
+            # ─── Role-based write enforcement ─────────────────────
+            if action_type in ("write_file", "edit_file"):
+                path = params.get("path", "")
+                err = self._check_write_permission(action_type, path)
+                if err:
+                    logger.warning(f"[{self.agent_id}] ROLE BLOCKED: {action_type} on '{path}' — {self.role}")
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[System] {err}",
+                    })
+                    return
+
             # Checkpoint gate — check action against rules before executing
             try:
                 from server.main import state as app_state
@@ -346,7 +406,7 @@ class BaseAgent(ABC):
             if action_type == "write_file":
                 path = params.get("path", "")
                 content = params.get("content", "")
-                # --- Layer 2: Block write_file on existing files ---
+                # Block write_file on existing files — must use edit_file
                 try:
                     full = self.workspace._validate_path(path)
                     if full.exists():
@@ -366,14 +426,20 @@ class BaseAgent(ABC):
                         return
                 except Exception:
                     pass  # If path validation fails, let write_file handle it
-                diff = await self.workspace.write_file(path, content, agent_id=self.agent_id)
-                await self.bus.publish(
-                    sender=self.agent_id,
-                    sender_role=self.role,
-                    msg_type=MessageType.FILE_UPDATE,
-                    content=f"Wrote file: {path}",
-                    data={"diff": diff, "path": path},
-                )
+                try:
+                    diff = await self.workspace.write_file(path, content, agent_id=self.agent_id)
+                    await self.bus.publish(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.FILE_UPDATE,
+                        content=f"Wrote file: {path}",
+                        data={"diff": diff, "path": path},
+                    )
+                except (FileNotFoundError, ValueError) as e:
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[write_file error]: {str(e)}",
+                    })
 
             elif action_type == "edit_file":
                 path = params.get("path", "")

@@ -120,13 +120,30 @@ class WorkspaceManager:
         """
         Write a file to the workspace with locking.
         Creates a backup before overwriting existing files.
-        Checks for stale writes if agent_id is provided.
+        Checks for stale writes and reservations if agent_id is provided.
         Returns a diff dict showing what changed.
         """
         full = self._validate_path(rel_path)
         lock = await self._get_lock(rel_path)
 
         async with lock:
+            # Check reservation — agent must hold it (or acquire it)
+            if agent_id and full.exists():
+                owner = self.file_tracker.get_owner(rel_path)
+                if owner and owner != agent_id:
+                    raise ValueError(
+                        f"File '{rel_path}' is reserved by {owner}. "
+                        f"Wait for them to finish or ask the orchestrator to reassign."
+                    )
+                # Auto-reserve if not reserved
+                self.file_tracker.reserve(agent_id, rel_path)
+
+            # Stale check for existing files
+            if agent_id and full.exists():
+                stale_msg = self._check_stale(agent_id, rel_path)
+                if stale_msg:
+                    raise ValueError(stale_msg)
+
             # Get old content for diff
             old_content = ""
             if full.exists():
@@ -148,6 +165,8 @@ class WorkspaceManager:
             if agent_id:
                 self._agent_reads[(agent_id, rel_path)] = new_hash
                 self.file_tracker.record(agent_id, rel_path, "write")
+                # Release reservation after successful write
+                self.file_tracker.release(agent_id, rel_path)
 
             # Generate diff
             diff = self._generate_diff(rel_path, old_content, content)
@@ -162,7 +181,7 @@ class WorkspaceManager:
         """
         Surgical inline edit — find `search` text in the file and replace with `replace`.
         Much safer than write_file as it only changes the targeted section.
-        Checks for stale writes if agent_id is provided.
+        Checks for stale writes and reservations if agent_id is provided.
         Returns a diff dict showing what changed.
         """
         full = self._validate_path(rel_path)
@@ -171,6 +190,17 @@ class WorkspaceManager:
         async with lock:
             if not full.exists():
                 raise FileNotFoundError(f"Cannot edit — file not found: {rel_path}")
+
+            # Check reservation — agent must hold it (or acquire it)
+            if agent_id:
+                owner = self.file_tracker.get_owner(rel_path)
+                if owner and owner != agent_id:
+                    raise ValueError(
+                        f"File '{rel_path}' is reserved by {owner}. "
+                        f"Wait for them to finish or ask the orchestrator to reassign."
+                    )
+                # Auto-reserve if not reserved
+                self.file_tracker.reserve(agent_id, rel_path)
 
             async with aiofiles.open(full, "r") as f:
                 old_content = await f.read()
@@ -192,14 +222,6 @@ class WorkspaceManager:
             if count > 1:
                 logger.warning(f"edit_file: '{search[:50]}...' found {count} times in {rel_path}, replacing first occurrence")
 
-            # Warn if another agent recently modified this file
-            recent_writers = self.file_tracker.get_recent_writers(rel_path, exclude=agent_id)
-            if recent_writers:
-                logger.warning(
-                    f"⚠️ File conflict: {agent_id} editing '{rel_path}' "
-                    f"which was recently modified by: {', '.join(recent_writers)}"
-                )
-
             # Create backup before editing
             await self._backup_file(full, old_content)
 
@@ -216,6 +238,8 @@ class WorkspaceManager:
             if agent_id:
                 self._agent_reads[(agent_id, rel_path)] = new_hash
                 self.file_tracker.record(agent_id, rel_path, "edit")
+                # Release reservation after successful edit
+                self.file_tracker.release(agent_id, rel_path)
 
             # Generate diff
             diff = self._generate_diff(rel_path, old_content, new_content)
