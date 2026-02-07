@@ -17,8 +17,8 @@ from server.agents.base_agent import BaseAgent
 # Capability sets the orchestrator can mix and match
 CAPABILITY_SETS = {
     "code": {
-        "actions": ["write_file", "read_file", "run_command", "use_terminal", "list_files"],
-        "description": "Can read, write, and execute code",
+        "actions": ["edit_file", "write_file", "read_file", "run_command", "use_terminal", "list_files"],
+        "description": "Can read, edit, write, and execute code",
     },
     "read_only": {
         "actions": ["read_file", "list_files"],
@@ -29,7 +29,7 @@ CAPABILITY_SETS = {
         "description": "Can read files for review purposes",
     },
     "test": {
-        "actions": ["write_file", "read_file", "run_command", "use_terminal", "list_files"],
+        "actions": ["edit_file", "write_file", "read_file", "run_command", "use_terminal", "list_files"],
         "description": "Can write test files and execute tests",
     },
     "communicate": {
@@ -66,7 +66,8 @@ You MUST respond with valid JSON:
     "thinking": "Your reasoning about the current situation",
     "action": "{available_actions_str}",
     "params": {{
-        // For write_file: {{"path": "relative/path", "content": "file content"}}
+        // For edit_file: {{"path": "relative/path", "search": "exact text to find", "replace": "replacement text"}}
+        // For write_file: {{"path": "relative/path", "content": "file content"}} (NEW files only!)
         // For read_file: {{"path": "relative/path"}}
         // For run_command: {{"command": "shell command"}} (one-shot)
         // For use_terminal: {{"command": "cmd", "session_id": "session-name", "wait_seconds": 5}} (persistent)
@@ -78,6 +79,12 @@ You MUST respond with valid JSON:
     }},
     "message": "Message to the team"
 }}
+
+## CRITICAL: File Editing Rules
+- **ALWAYS use `edit_file` to modify existing files** — it only changes the targeted section
+- **NEVER use `write_file` to modify an existing file** — it overwrites the ENTIRE file and destroys code
+- Before using `edit_file`, ALWAYS `read_file` first to get the exact current content
+- Only use `write_file` to create brand new files that don't exist yet
 
 ## Your Specific Guidelines
 {custom_guidelines}

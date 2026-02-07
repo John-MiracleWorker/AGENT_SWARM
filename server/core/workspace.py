@@ -68,6 +68,7 @@ class WorkspaceManager:
     async def write_file(self, rel_path: str, content: str) -> dict:
         """
         Write a file to the workspace with locking.
+        Creates a backup before overwriting existing files.
         Returns a diff dict showing what changed.
         """
         full = self._validate_path(rel_path)
@@ -79,6 +80,8 @@ class WorkspaceManager:
             if full.exists():
                 async with aiofiles.open(full, "r") as f:
                     old_content = await f.read()
+                # Create backup before overwriting
+                await self._backup_file(full, old_content)
 
             # Ensure parent directory exists
             full.parent.mkdir(parents=True, exist_ok=True)
@@ -95,6 +98,67 @@ class WorkspaceManager:
 
             logger.info(f"Wrote file: {rel_path} ({len(content)} chars)")
             return diff
+
+    async def edit_file(self, rel_path: str, search: str, replace: str) -> dict:
+        """
+        Surgical inline edit — find `search` text in the file and replace with `replace`.
+        Much safer than write_file as it only changes the targeted section.
+        Returns a diff dict showing what changed.
+        """
+        full = self._validate_path(rel_path)
+        lock = await self._get_lock(rel_path)
+
+        async with lock:
+            if not full.exists():
+                raise FileNotFoundError(f"Cannot edit — file not found: {rel_path}")
+
+            async with aiofiles.open(full, "r") as f:
+                old_content = await f.read()
+
+            # Validate search string exists
+            if search not in old_content:
+                raise ValueError(
+                    f"Search text not found in {rel_path}. "
+                    f"The file may have been modified. Use read_file first to see current content."
+                )
+
+            # Count occurrences
+            count = old_content.count(search)
+            if count > 1:
+                logger.warning(f"edit_file: '{search[:50]}...' found {count} times in {rel_path}, replacing first occurrence")
+
+            # Create backup before editing
+            await self._backup_file(full, old_content)
+
+            # Perform the replacement (first occurrence only)
+            new_content = old_content.replace(search, replace, 1)
+
+            # Write
+            async with aiofiles.open(full, "w") as f:
+                await f.write(new_content)
+
+            # Generate diff
+            diff = self._generate_diff(rel_path, old_content, new_content)
+            self._file_versions[rel_path] = new_content
+
+            logger.info(f"Edited file: {rel_path} (replaced {len(search)} chars → {len(replace)} chars)")
+            return diff
+
+    async def _backup_file(self, full_path: Path, content: str):
+        """Save a timestamped backup of a file before modification."""
+        import time
+        backup_dir = self.root / ".backups"
+        backup_dir.mkdir(exist_ok=True)
+
+        rel = full_path.relative_to(self.root)
+        # Flatten path for backup filename: src/app.js → src__app.js
+        flat_name = str(rel).replace("/", "__").replace("\\", "__")
+        ts = int(time.time())
+        backup_path = backup_dir / f"{flat_name}.{ts}.bak"
+
+        async with aiofiles.open(backup_path, "w") as f:
+            await f.write(content)
+        logger.debug(f"Backup saved: {backup_path.name}")
 
     async def delete_file(self, rel_path: str) -> bool:
         """Delete a file from the workspace."""

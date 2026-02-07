@@ -30,18 +30,20 @@ class BudgetExhaustedError(Exception):
 # ─── Model Definitions ────────────────────────────────────────────
 
 MODELS = [
-    # Gemini models
+    # Gemini models (paid)
     {"name": "gemini-3-pro-preview",    "provider": "gemini",  "rpm": 5,  "cost_in": 1.25, "cost_out": 10.00, "tier": "premium"},
     {"name": "gemini-3-flash-preview",  "provider": "gemini",  "rpm": 10, "cost_in": 0.15, "cost_out": 0.60,  "tier": "standard"},
     {"name": "gemini-2.5-flash",        "provider": "gemini",  "rpm": 10, "cost_in": 0.15, "cost_out": 0.60,  "tier": "standard"},
     {"name": "gemini-2.5-pro",          "provider": "gemini",  "rpm": 5,  "cost_in": 1.25, "cost_out": 10.00, "tier": "premium"},
     {"name": "gemini-2.0-flash",        "provider": "gemini",  "rpm": 15, "cost_in": 0.10, "cost_out": 0.40,  "tier": "fast"},
-    # Groq models (FREE)
-    {"name": "deepseek-r1-0528",              "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-reasoning"},
-    {"name": "llama-3.3-70b-versatile",       "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-coding"},
-    {"name": "qwen-3-32b",                    "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-reasoning"},
-    {"name": "llama-4-scout-17b-16e-instruct","provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-coding"},
-    {"name": "llama-3.1-8b-instant",          "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-fast"},
+    # Groq models (FREE) — best for structured code output
+    {"name": "openai/gpt-oss-120b",                  "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-coding"},
+    {"name": "openai/gpt-oss-20b",                   "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-fast"},
+    {"name": "moonshotai/kimi-k2-instruct-0905",     "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-coding"},
+    {"name": "meta-llama/llama-4-maverick-17b-128e-instruct", "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-coding"},
+    {"name": "llama-3.3-70b-versatile",              "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-general"},
+    {"name": "qwen/qwen3-32b",                       "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-reasoning"},
+    {"name": "llama-3.1-8b-instant",                 "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-fast"},
 ]
 
 # Role-based model cascade — ordered by preference per role
@@ -49,40 +51,42 @@ ROLE_CASCADES = {
     "Orchestrator": [
         "gemini-3-pro-preview",
         "gemini-2.5-pro",
-        "deepseek-r1-0528",
+        "qwen/qwen3-32b",
         "gemini-2.5-flash",
         "gemini-2.0-flash",
     ],
     "Developer": [
-        "llama-3.3-70b-versatile",
-        "llama-4-scout-17b-16e-instruct",
-        "qwen-3-32b",
+        "openai/gpt-oss-120b",                           # Best free coding model — OpenAI-grade structured output
+        "moonshotai/kimi-k2-instruct-0905",               # Strong coding, good JSON adherence
+        "meta-llama/llama-4-maverick-17b-128e-instruct",  # 128 experts, smarter than Scout
         "gemini-2.5-flash",
+        "openai/gpt-oss-20b",
         "gemini-2.0-flash",
-        "llama-3.1-8b-instant",
     ],
     "Reviewer": [
-        "deepseek-r1-0528",
-        "llama-3.3-70b-versatile",
+        "openai/gpt-oss-120b",
+        "qwen/qwen3-32b",
         "gemini-2.5-flash",
-        "qwen-3-32b",
+        "moonshotai/kimi-k2-instruct-0905",
     ],
     "Tester": [
-        "llama-3.3-70b-versatile",
-        "llama-4-scout-17b-16e-instruct",
+        "openai/gpt-oss-120b",
+        "moonshotai/kimi-k2-instruct-0905",
+        "meta-llama/llama-4-maverick-17b-128e-instruct",
         "gemini-2.5-flash",
         "gemini-2.0-flash",
-        "llama-3.1-8b-instant",
+        "openai/gpt-oss-20b",
     ],
 }
 
 # Default cascade for unknown roles (including dynamic agents)
 DEFAULT_CASCADE = [
-    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
+    "moonshotai/kimi-k2-instruct-0905",
     "gemini-2.5-flash",
-    "qwen-3-32b",
+    "qwen/qwen3-32b",
     "gemini-2.0-flash",
-    "llama-3.1-8b-instant",
+    "openai/gpt-oss-20b",
 ]
 
 # Default cost estimates (for Gemini models used in budget tracking)
@@ -162,6 +166,12 @@ class ModelRouter:
         self._budget_exceeded: bool = False
         self._on_budget_event = None
 
+        # Per-agent failure escalation tracking
+        # After ESCALATION_THRESHOLD consecutive failures, route to premium model
+        self._agent_failures: dict[str, int] = {}
+        self.ESCALATION_THRESHOLD = 3
+        self.ESCALATION_MODEL = "gemini-3-pro-preview"
+
         # Initialize model states
         self._models: dict[str, ModelState] = {}
         self._model_config: dict[str, dict] = {}
@@ -183,9 +193,21 @@ class ModelRouter:
         self._current_model = first_available or "none"
         logger.info(f"📡 Model router ready — {len(self._models)} models across {len(self._providers)} providers")
 
-    def _pick_best_model(self, role: str = "") -> Optional[str]:
-        """Pick the best available model for the given agent role."""
-        cascade = ROLE_CASCADES.get(role, DEFAULT_CASCADE)
+    def _pick_best_model(self, role: str = "", agent_id: str = "") -> Optional[str]:
+        """Pick the best available model for the given agent role.
+        If the agent has hit the failure escalation threshold, override to premium."""
+        cascade = list(ROLE_CASCADES.get(role, DEFAULT_CASCADE))
+
+        # ESCALATION: If agent has too many consecutive failures, lead with premium
+        failures = self._agent_failures.get(agent_id, 0)
+        if failures >= self.ESCALATION_THRESHOLD and self.ESCALATION_MODEL in self._models:
+            logger.warning(
+                f"🔥 [{agent_id}] {failures} consecutive failures — ESCALATING to {self.ESCALATION_MODEL}"
+            )
+            # Put premium model first, keep rest as fallback
+            if self.ESCALATION_MODEL in cascade:
+                cascade.remove(self.ESCALATION_MODEL)
+            cascade.insert(0, self.ESCALATION_MODEL)
 
         for model_name in cascade:
             if model_name in self._models:
@@ -250,9 +272,9 @@ class ModelRouter:
         total_attempts = self.max_retries * len(self._models)
 
         for attempt in range(total_attempts):
-            # Pick the best model for this role
+            # Pick the best model for this role (escalation-aware)
             async with self._queue_lock:
-                model_name = self._pick_best_model(role)
+                model_name = self._pick_best_model(role, agent_id=agent_id)
 
             if not model_name:
                 min_wait = min(s.wait_time() for s in self._models.values())
@@ -447,6 +469,38 @@ class ModelRouter:
 
     def set_file_context(self, file_context):
         self._file_context = file_context
+
+    # ─── Failure Escalation ──────────────────────────────────────
+
+    def record_agent_failure(self, agent_id: str):
+        """Record a consecutive action failure for an agent."""
+        self._agent_failures[agent_id] = self._agent_failures.get(agent_id, 0) + 1
+        count = self._agent_failures[agent_id]
+        if count == self.ESCALATION_THRESHOLD:
+            logger.warning(
+                f"🔥 [{agent_id}] Hit {count} failures — next request will escalate to {self.ESCALATION_MODEL}"
+            )
+        elif count > self.ESCALATION_THRESHOLD:
+            logger.info(f"🔥 [{agent_id}] Failure #{count} — still escalated to premium")
+
+    def record_agent_success(self, agent_id: str):
+        """Reset failure count on successful action."""
+        prev = self._agent_failures.get(agent_id, 0)
+        if prev >= self.ESCALATION_THRESHOLD:
+            logger.info(f"✅ [{agent_id}] Success after escalation — de-escalating back to normal routing")
+        self._agent_failures[agent_id] = 0
+
+    def get_escalation_status(self) -> dict:
+        """Get current escalation status for all agents."""
+        return {
+            agent_id: {
+                "failures": count,
+                "escalated": count >= self.ESCALATION_THRESHOLD,
+                "threshold": self.ESCALATION_THRESHOLD,
+            }
+            for agent_id, count in self._agent_failures.items()
+            if count > 0
+        }
 
 
 # Backward compatibility alias

@@ -134,13 +134,29 @@ class BaseAgent(ABC):
                     await asyncio.sleep(1)
                     continue
 
-                # GATE: Non-orchestrator agents wait for task assignments
+                # GATE: Non-orchestrator agents wait for task assignments OR actionable messages
                 if self._should_wait_for_tasks() and not self._has_assigned_tasks():
-                    # Still collect messages (don't lose them) but don't act yet
-                    _ = await self._observe()  # drain queue to prevent buildup
-                    self.status = AgentStatus.IDLE
-                    await asyncio.sleep(2)
-                    continue
+                    # Collect messages but check if any are actionable (not just system noise)
+                    pending = await self._observe()
+                    actionable = any(
+                        m.msg_type in (
+                            MessageType.TASK_ASSIGNED,
+                            MessageType.REVIEW_REQUEST,
+                            MessageType.REVIEW_RESULT,
+                        )
+                        or self.agent_id in m.mentions
+                        for m in pending
+                    )
+                    if not actionable:
+                        # Buffer messages so they're not lost
+                        for m in pending:
+                            self._inbox.put_nowait(m)
+                        self.status = AgentStatus.IDLE
+                        await asyncio.sleep(2)
+                        continue
+                    # Actionable message received — put messages back and fall through to normal flow
+                    for m in pending:
+                        self._inbox.put_nowait(m)
 
                 # OBSERVE — collect new messages
                 new_messages = await self._observe()
@@ -164,9 +180,11 @@ class BaseAgent(ABC):
                 await self._broadcast_status()
                 await self._act(action)
 
-                # Reset error counter on success
+                # Reset error counter on success & notify router
                 self._consecutive_errors = 0
                 self._error_backoff = 1.0
+                # De-escalate model routing on success
+                self.gemini.record_agent_success(self.agent_id)
 
                 # Delay between cycles to prevent tight loops
                 await asyncio.sleep(3)
@@ -190,6 +208,8 @@ class BaseAgent(ABC):
                 break
             except Exception as e:
                 self._consecutive_errors += 1
+                # Track failure for model escalation
+                self.gemini.record_agent_failure(self.agent_id)
                 logger.error(
                     f"[{self.agent_id}] Error #{self._consecutive_errors}: {e}",
                     exc_info=True,
@@ -335,6 +355,31 @@ class BaseAgent(ABC):
                     data={"diff": diff, "path": path},
                 )
 
+            elif action_type == "edit_file":
+                path = params.get("path", "")
+                search = params.get("search", "")
+                replace = params.get("replace", "")
+                if not search:
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": "[System] edit_file requires a non-empty 'search' parameter.",
+                    })
+                    return
+                try:
+                    diff = await self.workspace.edit_file(path, search, replace)
+                    await self.bus.publish(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.FILE_UPDATE,
+                        content=f"Edited file: {path}",
+                        data={"diff": diff, "path": path},
+                    )
+                except (FileNotFoundError, ValueError) as e:
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[edit_file error]: {str(e)}",
+                    })
+
             elif action_type == "read_file":
                 path = params.get("path", "")
                 content = await self.workspace.read_file(path)
@@ -346,9 +391,16 @@ class BaseAgent(ABC):
 
             elif action_type == "run_command":
                 command = params.get("command", "")
-                # Check if dangerous
-                if self.terminal.is_dangerous(command):
-                    await self._request_approval("run_command", params, f"Agent wants to run: `{command}`")
+                # ALL terminal commands require user approval
+                approved = await self._request_approval(
+                    "run_command", params,
+                    f"🖥️ [{self.agent_id}] wants to run: `{command}`",
+                )
+                if not approved:
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[System] Command REJECTED by user: `{command}`. Try a different approach or ask for guidance.",
+                    })
                     return
 
                 result = await self.terminal.execute(
@@ -648,6 +700,19 @@ class BaseAgent(ABC):
                 command = params.get("command", "")
                 session_id = params.get("session_id", f"agent-{self.agent_id}")
                 wait_seconds = min(params.get("wait_seconds", 3), 10)
+
+                # ALL terminal commands require user approval
+                approved = await self._request_approval(
+                    "use_terminal", params,
+                    f"🖥️ [{self.agent_id}] wants to run in terminal '{session_id}': `{command}`",
+                )
+                if not approved:
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[System] Terminal command REJECTED by user: `{command}`. Try a different approach.",
+                    })
+                    return
+
                 try:
                     from server.main import state as app_state
                     terminal = app_state.interactive_terminal
@@ -739,11 +804,12 @@ class BaseAgent(ABC):
                 content=f"Error executing {action_type}: {str(e)}",
             )
 
-    async def _request_approval(self, action_type: str, params: dict, description: str):
-        """Request user approval for a dangerous action."""
+    async def _request_approval(self, action_type: str, params: dict, description: str) -> bool:
+        """Request user approval for a command. Blocks until approved/rejected or timeout."""
         import uuid
         approval_id = str(uuid.uuid4())[:8]
-        self._pending_approvals[approval_id] = asyncio.get_event_loop().create_future()
+        future = asyncio.get_event_loop().create_future()
+        self._pending_approvals[approval_id] = future
 
         await self.bus.publish(
             sender=self.agent_id,
@@ -760,10 +826,25 @@ class BaseAgent(ABC):
         self.status = AgentStatus.WAITING
         await self._broadcast_status()
 
+        # Block until user responds (5 minute timeout)
+        try:
+            approved = await asyncio.wait_for(future, timeout=300)
+            return approved
+        except asyncio.TimeoutError:
+            logger.warning(f"[{self.agent_id}] Approval {approval_id} timed out after 5 minutes")
+            self._pending_approvals.pop(approval_id, None)
+            self._messages_history.append({
+                "role": "user",
+                "content": f"[System] Command approval timed out (5 min). Command was NOT executed: {params.get('command', '')}",
+            })
+            return False
+
     async def resolve_approval(self, approval_id: str, approved: bool):
         """Resolve a pending approval request."""
         if approval_id in self._pending_approvals:
-            self._pending_approvals[approval_id].set_result(approved)
+            future = self._pending_approvals.pop(approval_id)
+            if not future.done():
+                future.set_result(approved)
 
     async def inject_message(self, content: str):
         """Inject a message from the user into the agent's context."""

@@ -125,9 +125,23 @@ async def review_project(state, tasks, bus):
 
     # Call Gemini for review
     try:
-        model_name = state.gemini._pick_best_model()
+        # The project reviewer uses the Gemini Files API, so it MUST use a Gemini model.
+        # Groq models don't exist on Google's API and will 404.
+        GEMINI_REVIEW_MODELS = [
+            "gemini-2.5-flash",
+            "gemini-3-flash-preview",
+            "gemini-2.0-flash",
+            "gemini-2.5-pro",
+            "gemini-3-pro-preview",
+        ]
+        model_name = None
+        for m in GEMINI_REVIEW_MODELS:
+            model_info = state.gemini._models.get(m)
+            if model_info and model_info.get("available", False):
+                model_name = m
+                break
         if not model_name:
-            model_name = "gemini-2.5-flash"  # fallback
+            model_name = "gemini-2.5-flash"  # ultimate fallback
 
         logger.info(f"🔍 Sending project for review to {model_name}...")
 
