@@ -36,6 +36,10 @@ CAPABILITY_SETS = {
         "actions": ["message", "suggest_task", "update_task", "request_review"],
         "description": "Can communicate with the team and manage tasks",
     },
+    "research": {
+        "actions": ["read_file", "list_files", "use_tool", "message", "suggest_task", "update_task"],
+        "description": "Can research web/documentation sources and report findings",
+    },
 }
 
 # Default capabilities for dynamic agents

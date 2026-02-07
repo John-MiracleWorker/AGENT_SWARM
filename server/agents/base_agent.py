@@ -826,6 +826,10 @@ class BaseAgent(ABC):
                 tool_name = params.get("tool", "")
                 tool_path = params.get("path", ".")
                 tool_pattern = params.get("pattern", "")
+                tool_query = params.get("query", tool_pattern)
+                tool_url = params.get("url", "")
+                max_results = params.get("max_results", 5)
+                max_chars = params.get("max_chars", 6000)
                 try:
                     from server.main import state as app_state
                     tool_obj = app_state.plugin_registry.get_tool(tool_name)
@@ -841,6 +845,10 @@ class BaseAgent(ABC):
                         workspace=str(self.workspace.root),
                         path=tool_path,
                         pattern=tool_pattern,
+                        query=tool_query,
+                        url=tool_url,
+                        max_results=max_results,
+                        max_chars=max_chars,
                     )
                     if cmd:
                         result = await self.terminal.execute(

@@ -16,6 +16,7 @@ from server.agents.orchestrator import OrchestratorAgent
 from server.agents.developer import DeveloperAgent
 from server.agents.reviewer import ReviewerAgent
 from server.agents.tester import TesterAgent
+from server.agents.researcher import ResearchAgent
 
 logger = logging.getLogger(__name__)
 
@@ -97,12 +98,14 @@ def create_router(state) -> APIRouter:
         developer = DeveloperAgent(**agent_kwargs)
         reviewer = ReviewerAgent(**agent_kwargs)
         tester = TesterAgent(**agent_kwargs)
+        researcher = ResearchAgent(**agent_kwargs)
 
         state.agents = {
             "orchestrator": orchestrator,
             "developer": developer,
             "reviewer": reviewer,
             "tester": tester,
+            "researcher": researcher,
         }
 
         # Set the goal on the orchestrator
