@@ -3,12 +3,12 @@ REST API Routes — Mission management, file browsing, user intervention.
 """
 
 import asyncio
-import os
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from server.core.message_bus import MessageType
@@ -34,8 +34,23 @@ class ApprovalAction(BaseModel):
     approved: bool
 
 
+def _authorize_request(state, x_api_key: str = Header(default="", alias="X-API-Key")):
+    """Authorize API requests when AGENT_SWARM_API_KEY is configured."""
+    if state.is_authorized(x_api_key):
+        return
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 def create_router(state) -> APIRouter:
-    router = APIRouter()
+    def authorize(x_api_key: str = Header(default="", alias="X-API-Key")):
+        _authorize_request(state, x_api_key)
+
+    router = APIRouter(dependencies=[Depends(authorize)])
+
+    async def reset_mission_runtime_state():
+        """Clear mission-scoped runtime state before starting a new mission."""
+        state.task_manager.clear()
+        await state.message_bus.clear_runtime_state()
 
     @router.post("/missions")
     async def create_mission(req: MissionCreate):
@@ -51,10 +66,12 @@ def create_router(state) -> APIRouter:
             raise HTTPException(400, f"Invalid workspace path: {req.workspace_path}")
 
         # Initialize workspace
-        state.workspace.set_root(str(workspace))
+        await reset_mission_runtime_state()
+        ws = state.add_workspace(str(workspace), workspace.name)
+        state.switch_workspace(ws["id"])
         state.mission_goal = req.goal
         state.mission_active = True
-        state.mission_start_time = __import__('time').time()
+        state.mission_start_time = time.time()
 
         # Initialize git
         await state.git_manager.init_repo(str(workspace))
@@ -144,6 +161,8 @@ def create_router(state) -> APIRouter:
         await state.git_manager.auto_commit("Mission stopped — final state")
 
         state.mission_active = False
+        state.agents = {}
+        state.mission_goal = None
 
         await state.message_bus.publish(
             sender="system",

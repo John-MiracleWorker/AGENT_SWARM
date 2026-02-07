@@ -3,10 +3,8 @@ Agent Swarm — FastAPI Entry Point
 Serves the API, WebSocket, and static frontend files.
 """
 
-import asyncio
 import logging
 import os
-import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -50,8 +48,11 @@ class SwarmState:
     def __init__(self):
         api_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
+        self.auth_token = os.getenv("AGENT_SWARM_API_KEY", "").strip()
         if not api_key:
             logger.warning("GEMINI_API_KEY not set! Agents will fail to think.")
+        if not self.auth_token:
+            logger.warning("AGENT_SWARM_API_KEY not set. API and WebSocket endpoints are UNPROTECTED.")
 
         self.gemini = ModelRouter(gemini_api_key=api_key, groq_api_key=groq_key)
         self.message_bus = MessageBus()
@@ -80,6 +81,17 @@ class SwarmState:
         self._workspaces: dict[str, dict] = {}  # id -> {path, name, active}
         self._active_workspace_id: str | None = None
 
+    @property
+    def auth_enabled(self) -> bool:
+        """Whether API/WebSocket authentication is enabled."""
+        return bool(self.auth_token)
+
+    def is_authorized(self, token: str) -> bool:
+        """Validate a request token against configured API key."""
+        if not self.auth_enabled:
+            return True
+        return token == self.auth_token
+
     def list_workspaces(self) -> list[dict]:
         """List all registered workspaces."""
         return [
@@ -104,6 +116,7 @@ class SwarmState:
         if workspace_id in self._workspaces:
             self._active_workspace_id = workspace_id
             ws = self._workspaces[workspace_id]
+            self.workspace.set_root(ws["path"])
             logger.info(f"Switched to workspace: {ws['name']} ({ws['path']})")
 
 

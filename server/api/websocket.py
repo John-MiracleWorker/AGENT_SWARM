@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import uuid
+import os
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -17,6 +18,12 @@ logger = logging.getLogger(__name__)
 # Connected WebSocket clients for event stream
 _clients: set[WebSocket] = set()
 _broadcast_registered = False
+
+
+def _is_websocket_authorized(websocket: WebSocket, state) -> bool:
+    """Validate WebSocket X-API-Key header when authentication is enabled."""
+    token = websocket.headers.get("x-api-key", "")
+    return state.is_authorized(token)
 
 
 async def broadcast_to_clients(message: dict):
@@ -47,6 +54,10 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # Register the broadcast callback ONCE, not per-connection
     from server.main import state
+    if not _is_websocket_authorized(websocket, state):
+        await websocket.close(code=1008)
+        return
+
     if not _broadcast_registered:
         state.message_bus.register_ws_callback(broadcast_to_clients)
         _broadcast_registered = True
@@ -111,6 +122,9 @@ async def terminal_websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
     from server.main import state
+    if not _is_websocket_authorized(websocket, state):
+        await websocket.close(code=1008)
+        return
 
     session_id = str(uuid.uuid4())[:8]
     logger.info(f"Terminal WebSocket connected, creating session {session_id}")
@@ -194,6 +208,3 @@ async def terminal_websocket_endpoint(websocket: WebSocket):
         await state.interactive_terminal.kill_session(session_id)
         logger.info(f"Terminal session cleaned up: {session_id}")
 
-
-# Need os import for cwd default
-import os
