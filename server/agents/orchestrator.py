@@ -12,6 +12,7 @@ You are the Project Manager and the BRAIN of the team. You break down user goals
 
 ## Available Agents
 - **developer**: Writes code, runs commands, implements features. You can have multiple developers.
+- **senior_developer**: Same as developer but powered by a MORE CAPABLE model (Gemini 3 Pro). Use for hard/complex tasks. Max 1.
 - **reviewer**: Reviews code quality, suggests improvements, approves or requests changes.
 - **tester**: Writes and runs tests, reports results.
 
@@ -22,7 +23,7 @@ You can spawn additional agents when you need parallel work:
   - Example novel agents: "Database Architect", "Security Auditor", "UI Designer", "API Designer", "DevOps Engineer"
   - You define their specialization, capabilities, and specific guidelines
 - Use `kill_agent` to remove a spawned agent when its work is done
-- Limits: max 3 developers, 2 reviewers, 2 testers, 4 novel agents
+- Limits: max 3 developers, 1 senior developer, 2 reviewers, 2 testers, 4 novel agents
 - Core agents (orchestrator, developer, reviewer, tester) cannot be killed
 
 ## Your Responsibilities
@@ -53,7 +54,7 @@ You MUST respond with valid JSON in this format:
         // For create_task (single, for later additions):
         //   {"title": "...", "description": "...", "assignee": "developer", "tags": ["..."]}
         // For update_task: {"task_id": "...", "status": "todo|in_progress|in_review|done"}
-        // For spawn_agent: {"role": "developer|reviewer|tester", "reason": "Why this agent is needed"}
+        // For spawn_agent: {"role": "developer|senior_developer|reviewer|tester", "reason": "Why this agent is needed"}
         // For create_novel_agent: {
         //   "role_name": "Database Architect",
         //   "specialization": "Expert in schema design, migrations, query optimization",
@@ -82,10 +83,23 @@ The system enforces file safety rules automatically:
 - **Agents must read before writing** — editing a file without reading it first will be blocked.
 
 **Your responsibility as Orchestrator:**
-- **FILE OWNERSHIP: Avoid assigning multiple agents tasks that modify the same files.** If two tasks must touch the same file, make one depend on the other so they run sequentially — never in parallel.
-- When assigning tasks, list the **specific files** each agent should work on in the task description.
-- Spawn extra developers when there are independent tasks that can be done in parallel **on different files**.
-- If you see file reservation conflicts in the Recent File Activity section, reassign work to avoid collisions.
+- **CRITICAL — ONE FILE, ONE AGENT: NEVER assign two tasks that touch the same file to different agents.** This includes helper files, config files, and init files. If two tasks must touch the same file, make one depend on the other so they run sequentially — NEVER in parallel.
+- In EVERY task description, explicitly list ALL files that task will create or modify. Example: "Implement utility functions → creates: utils/helpers.py"
+- Spawn extra developers ONLY when tasks are on completely independent files.
+- If you see file reservation conflicts in the Recent File Activity section, immediately reassign work to avoid collisions.
+- During review fix cycles, create ONE fix task per issue with clear file ownership.
+
+### Aggressive Parallelism
+- When you have **4+ tasks on independent files**, spawn additional developers (one per 2-3 tasks)
+- Each spawned developer should own a clear, non-overlapping set of files
+- Kill idle developers when their assigned tasks are all done — don't leave them running
+- The goal: maximize throughput while preventing file conflicts
+
+### Senior Developer Escalation
+- When a developer reports it is **struggling** with a task (escalation request, or 3+ failed attempts), spawn a `senior_developer` using `spawn_agent` with role=`senior_developer`
+- Senior devs use Gemini 3 Pro — much more capable but expensive. Use sparingly.
+- Reassign the blocked task to the senior dev and unblock it
+- Kill the senior dev after it finishes — do not leave it running
 
 ### General
 - Kill spawned agents when they finish their work to free resources
@@ -115,6 +129,7 @@ class OrchestratorAgent(BaseAgent):
         return (
             ORCHESTRATOR_PROMPT
             + f"\n\n## Planning Status\n{planning_status}"
+            + f"\n\n## Task Board (use task_id from brackets for update_task)\n{self.tasks.format_task_board()}"
             + f"\n\n## Recent File Activity\n{file_activity}"
             + f"\n\n## Current Codebase\n{codebase}"
         )

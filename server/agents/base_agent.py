@@ -6,7 +6,11 @@ Implements the observe → think → act event loop.
 import asyncio
 import json
 import logging
+import os
+import subprocess
 import time
+import re
+import uuid
 from abc import ABC, abstractmethod
 from typing import Optional
 from enum import Enum
@@ -32,7 +36,29 @@ WRITE_ROLES = {"Developer", "Orchestrator"}
 TESTER_WRITE_ALLOWED = True
 TESTER_WRITE_PATTERNS = ("test_", "tests/", "spec/", "__tests__/", "_test.", ".test.")
 # Reviewer is NEVER allowed to write files
-REVIEWER_WRITE_ALLOWED = False
+REVIEWER_WRITE_ALLOWED = False   # Reviewers cannot write ANY files
+
+# ─── Safe terminal commands (auto-approved, no user confirmation needed) ───
+SAFE_COMMAND_PREFIXES = (
+    "python3 -m pytest", "python -m pytest", "pytest",
+    "python3 -m py_compile", "python -m py_compile",
+    "python3 -c", "python -c",
+    "cat ", "head ", "tail ", "wc ",
+    "ls", "find ", "grep ", "rg ",
+    "echo ", "pwd", "which ", "whoami",
+    "tree ", "file ", "stat ",
+    "diff ", "sort ", "uniq ",
+    "node -e", "node --version", "npm list", "npm test", "npm run test",
+)
+DESTRUCTIVE_PATTERNS = (
+    "rm ", "rm -", "rmdir", "mv ", "cp ",
+    "pip install", "pip3 install", "npm install", "yarn add",
+    "brew ", "apt ", "sudo ",
+    "chmod ", "chown ",
+    "kill ", "pkill ",
+    "curl ", "wget ",
+    "> ", ">> ", "| tee",
+)
 
 
 class AgentStatus(str, Enum):
@@ -84,6 +110,8 @@ class BaseAgent(ABC):
         self._consecutive_errors: int = 0
         self._error_backoff: float = 1.0
         self._last_thinking_broadcast: float = 0  # throttle thought broadcasts
+        self.model_override: Optional[str] = None  # Pin to specific model (e.g. senior dev)
+        self._task_failures: dict[str, int] = {}  # task_id → consecutive failure count
 
     @property
     @abstractmethod
@@ -301,7 +329,7 @@ class BaseAgent(ABC):
                 agent_id=self.agent_id,
                 system_prompt=self.system_prompt,
                 messages=trimmed,
-                role=self.role,
+                model_override=self.model_override,
             )
 
             # Broadcast thought bubble with reasoning
@@ -364,6 +392,45 @@ class BaseAgent(ABC):
                 )
 
         return None
+
+    def _is_safe_command(self, command: str) -> bool:
+        """Check if a terminal command is safe to auto-approve without user confirmation."""
+        cmd = command.strip()
+        # Explicit destructive patterns always need approval
+        if any(pat in cmd for pat in DESTRUCTIVE_PATTERNS):
+            return False
+        # Commands with pipes or redirects need approval (except safe ones)
+        if '|' in cmd and not cmd.startswith(('grep ', 'cat ')):
+            return False
+        # Check against known-safe prefixes
+        return any(cmd.startswith(prefix) for prefix in SAFE_COMMAND_PREFIXES)
+
+    async def _validate_python_syntax(self, path: str):
+        """Run py_compile on a Python file after write/edit and report errors to the agent."""
+        if not path.endswith('.py'):
+            return
+        try:
+            full_path = self.workspace._validate_path(path)
+            result = subprocess.run(
+                ['python3', '-m', 'py_compile', str(full_path)],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                error_msg = (result.stderr or result.stdout).strip()
+                logger.warning(f"[{self.agent_id}] Syntax error in {path}: {error_msg}")
+                self._messages_history.append({
+                    "role": "user",
+                    "content": (
+                        f"[System] ⚠️ SYNTAX ERROR detected in '{path}' after your edit:\n"
+                        f"```\n{error_msg}\n```\n"
+                        f"You MUST fix this immediately using edit_file. "
+                        f"First read_file to see the current state, then fix the broken lines."
+                    ),
+                })
+            else:
+                logger.debug(f"[{self.agent_id}] Syntax OK: {path}")
+        except Exception as e:
+            logger.debug(f"[{self.agent_id}] Syntax check skipped for {path}: {e}")
 
     async def _act(self, action: dict):
         """Execute a structured action from Gemini."""
@@ -435,6 +502,8 @@ class BaseAgent(ABC):
                         content=f"Wrote file: {path}",
                         data={"diff": diff, "path": path},
                     )
+                    # Post-write syntax validation for Python files
+                    await self._validate_python_syntax(path)
                 except (FileNotFoundError, ValueError) as e:
                     self._messages_history.append({
                         "role": "user",
@@ -460,6 +529,8 @@ class BaseAgent(ABC):
                         content=f"Edited file: {path}",
                         data={"diff": diff, "path": path},
                     )
+                    # Post-edit syntax validation for Python files
+                    await self._validate_python_syntax(path)
                 except (FileNotFoundError, ValueError) as e:
                     self._messages_history.append({
                         "role": "user",
@@ -477,17 +548,18 @@ class BaseAgent(ABC):
 
             elif action_type == "run_command":
                 command = params.get("command", "")
-                # ALL terminal commands require user approval
-                approved = await self._request_approval(
-                    "run_command", params,
-                    f"🖥️ [{self.agent_id}] wants to run: `{command}`",
-                )
-                if not approved:
-                    self._messages_history.append({
-                        "role": "user",
-                        "content": f"[System] Command REJECTED by user: `{command}`. Try a different approach or ask for guidance.",
-                    })
-                    return
+                # Auto-approve safe commands, require approval for potentially destructive ones
+                if not self._is_safe_command(command):
+                    approved = await self._request_approval(
+                        "run_command", params,
+                        f"🖥️ [{self.agent_id}] wants to run: `{command}`",
+                    )
+                    if not approved:
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[System] Command REJECTED by user: `{command}`. Try a different approach or ask for guidance.",
+                        })
+                        return
 
                 result = await self.terminal.execute(
                     command=command,
@@ -580,14 +652,29 @@ class BaseAgent(ABC):
 
             elif action_type == "suggest_task":
                 # Non-orchestrator agents suggest tasks to the orchestrator
-                await self.bus.publish(
-                    sender=self.agent_id,
-                    sender_role=self.role,
-                    msg_type=MessageType.CHAT,
-                    content=f"💡 Task suggestion: {params.get('title', '')}\nReason: {params.get('reason', message)}",
-                    data={"suggestion": params},
-                    mentions=["orchestrator"],
-                )
+                # Dedup: check if a similar suggestion was recently made
+                suggestion_title = params.get('title', '')
+                suggestion_key = suggestion_title.lower().strip()
+                if not hasattr(self, '_recent_suggestions'):
+                    self._recent_suggestions = {}
+                # Prune suggestions older than 2 minutes
+                now = time.time()
+                self._recent_suggestions = {
+                    k: v for k, v in self._recent_suggestions.items()
+                    if now - v < 120
+                }
+                if suggestion_key in self._recent_suggestions:
+                    logger.info(f"[{self.agent_id}] Deduped suggestion: {suggestion_title}")
+                else:
+                    self._recent_suggestions[suggestion_key] = now
+                    await self.bus.publish(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.CHAT,
+                        content=f"💡 Task suggestion: {suggestion_title}\nReason: {params.get('reason', message)}",
+                        data={"suggestion": params},
+                        mentions=["orchestrator"],
+                    )
 
             elif action_type == "update_task":
                 task_id = params.get("task_id", "")
@@ -616,6 +703,21 @@ class BaseAgent(ABC):
                                 content="🏁 All tasks appear to be done! Orchestrator, please verify and use `done` to complete the mission.",
                                 mentions=["orchestrator"],
                             )
+                    # Auto-trigger tester when a developer marks a coding task done
+                    elif status == TaskStatus.DONE and self.role == "Developer":
+                        task_obj = self.tasks.get_task(task_id)
+                        task_title = task_obj.title if task_obj else ""
+                        if task_title and not task_title.startswith("[Test]"):
+                            await self.bus.publish(
+                                sender=self.agent_id,
+                                sender_role=self.role,
+                                msg_type=MessageType.CHAT,
+                                content=(
+                                    f"✅ Task '{task_title}' implementation complete. "
+                                    f"@tester please run tests to verify."
+                                ),
+                                mentions=["tester"],
+                            )
 
             elif action_type == "request_review":
                 await self.bus.publish(
@@ -626,6 +728,37 @@ class BaseAgent(ABC):
                     data=params,
                     mentions=params.get("reviewers", []),
                 )
+
+            elif action_type == "escalate_task":
+                # Developer admits defeat — ask orchestrator to spawn a senior dev
+                task_id = params.get("task_id", "")
+                reason = params.get("reason", "Task is too complex for me")
+                try:
+                    task = self.tasks._resolve_task(task_id)
+                    # Mark task as blocked
+                    self.tasks.update_status(task.id, TaskStatus.BLOCKED, self.agent_id)
+                    await self.bus.publish(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.CHAT,
+                        content=(
+                            f"🆘 ESCALATION REQUEST: Task [{task.id}] '{task.title}' needs a senior developer.\n"
+                            f"Reason: {reason}\n\n"
+                            f"@orchestrator Please spawn a `senior_developer` using `spawn_agent` with role=`senior_developer` "
+                            f"and reassign this task to them. Senior devs use a more powerful model."
+                        ),
+                        mentions=["orchestrator"],
+                    )
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[System] ✅ Escalation sent. Task [{task.id}] marked as BLOCKED. "
+                                   f"Orchestrator will assign a senior developer.",
+                    })
+                except ValueError as e:
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": f"[System] Escalation failed: {str(e)}",
+                    })
 
             elif action_type == "list_files":
                 files = await self.workspace.list_files(params.get("path", ""))
@@ -787,17 +920,18 @@ class BaseAgent(ABC):
                 session_id = params.get("session_id", f"agent-{self.agent_id}")
                 wait_seconds = min(params.get("wait_seconds", 3), 10)
 
-                # ALL terminal commands require user approval
-                approved = await self._request_approval(
-                    "use_terminal", params,
-                    f"🖥️ [{self.agent_id}] wants to run in terminal '{session_id}': `{command}`",
-                )
-                if not approved:
-                    self._messages_history.append({
-                        "role": "user",
-                        "content": f"[System] Terminal command REJECTED by user: `{command}`. Try a different approach.",
-                    })
-                    return
+                # Auto-approve safe commands, require approval for potentially destructive ones
+                if not self._is_safe_command(command):
+                    approved = await self._request_approval(
+                        "use_terminal", params,
+                        f"🖥️ [{self.agent_id}] wants to run in terminal '{session_id}': `{command}`",
+                    )
+                    if not approved:
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[System] Terminal command REJECTED by user: `{command}`. Try a different approach.",
+                        })
+                        return
 
                 try:
                     from server.main import state as app_state

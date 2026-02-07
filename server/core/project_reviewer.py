@@ -234,22 +234,27 @@ async def run_review_loop(state, tasks, bus, on_new_tasks=None):
         # Has issues — create tasks if not on final cycle
         issues = result.get("issues", [])
         if cycle < MAX_REVIEW_CYCLES and issues and on_new_tasks:
-            logger.info(f"📋 Creating {len(issues)} tasks from review issues")
+            logger.info(f"📋 Routing {len(issues)} issues to orchestrator for task creation")
             await on_new_tasks(issues)
 
-            # Wait for agents to work on the new tasks
-            # The caller should handle resuming agents
-            await asyncio.sleep(5)  # Brief pause before re-review
+            # Wait for orchestrator to create tasks and agents to complete them
+            # Phase 1: Give orchestrator time to plan and create tasks
+            await asyncio.sleep(15)
 
-            # Wait for tasks to be done
-            max_wait = 120  # 2 minutes max wait per cycle
+            # Phase 2: Wait for all tasks to be completed
+            max_wait = 300  # 5 minutes max wait per cycle
             waited = 0
+            poll_interval = 10
             while waited < max_wait:
                 summary = tasks.get_summary()
-                if summary.get("todo", 0) == 0 and summary.get("in_progress", 0) == 0:
+                open_tasks = summary.get("todo", 0) + summary.get("in_progress", 0)
+                if open_tasks == 0:
+                    logger.info(f"✅ All tasks done after {waited}s — proceeding to re-review")
                     break
-                await asyncio.sleep(5)
-                waited += 5
+                if waited % 30 == 0:
+                    logger.info(f"⏳ Waiting for {open_tasks} task(s) to complete... ({waited}s/{max_wait}s)")
+                await asyncio.sleep(poll_interval)
+                waited += poll_interval
 
         elif cycle == MAX_REVIEW_CYCLES:
             logger.warning(f"⚠️ Max review cycles reached with {len(issues)} remaining issues")

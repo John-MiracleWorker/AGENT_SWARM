@@ -18,6 +18,7 @@ class TaskStatus(str, Enum):
     IN_REVIEW = "in_review"
     DONE = "done"
     BLOCKED = "blocked"
+    WAITING = "waiting"
 
 
 @dataclass
@@ -78,10 +79,32 @@ class TaskManager:
         logger.info(f"Task created: [{task.id}] {title} -> {assignee or 'unassigned'}")
         return task
 
+    def _resolve_task(self, task_id_or_title: str) -> Task:
+        """Resolve a task by ID, exact title, or substring title match."""
+        # 1. Direct ID match
+        if task_id_or_title in self._tasks:
+            return self._tasks[task_id_or_title]
+
+        # 2. Exact title match (case-insensitive)
+        needle = task_id_or_title.strip().lower()
+        for task in self._tasks.values():
+            if task.title.strip().lower() == needle:
+                logger.info(f"Resolved task by title: '{task_id_or_title}' → [{task.id}]")
+                return task
+
+        # 3. Substring match (LLMs often abbreviate)
+        matches = [
+            t for t in self._tasks.values()
+            if needle in t.title.lower() or t.title.lower() in needle
+        ]
+        if len(matches) == 1:
+            logger.info(f"Resolved task by substring: '{task_id_or_title}' → [{matches[0].id}]")
+            return matches[0]
+
+        raise ValueError(f"Task not found: {task_id_or_title}")
+
     def update_status(self, task_id: str, status: TaskStatus, agent_id: str = "") -> Task:
-        if task_id not in self._tasks:
-            raise ValueError(f"Task not found: {task_id}")
-        task = self._tasks[task_id]
+        task = self._resolve_task(task_id)
         old_status = task.status
         task.status = status
         task.updated_at = time.time()
@@ -143,4 +166,25 @@ class TaskManager:
         """Clear all tasks for a new mission."""
         self._tasks.clear()
         self.planning_complete = False
+
+    def format_task_board(self) -> str:
+        """Format task board for inclusion in agent system prompts."""
+        if not self._tasks:
+            return "No tasks created yet."
+        status_emoji = {
+            TaskStatus.TODO: "⬜",
+            TaskStatus.IN_PROGRESS: "🔵",
+            TaskStatus.IN_REVIEW: "🟡",
+            TaskStatus.DONE: "✅",
+            TaskStatus.BLOCKED: "🔴",
+            TaskStatus.WAITING: "⏳",
+        }
+        lines = []
+        for t in self._tasks.values():
+            emoji = status_emoji.get(t.status, "❓")
+            assignee = f" → {t.assignee}" if t.assignee else ""
+            lines.append(f"- {emoji} [{t.id}] {t.title}{assignee}")
+        summary = self.get_summary()
+        header = f"**{summary.get('done', 0)}/{summary.get('total', 0)} done**"
+        return header + "\n" + "\n".join(lines)
 

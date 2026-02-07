@@ -188,10 +188,12 @@ class GeminiClient:
         system_prompt: str,
         messages: list[dict],
         temperature: float = 0.7,
+        model_override: Optional[str] = None,
     ) -> dict:
         """
         Generate a response using the best available Gemini model.
         Automatically falls back to other models on rate limit.
+        If model_override is set, try that model first before cascade.
         """
         if not self.client:
             raise RuntimeError("Gemini client not initialized — set GEMINI_API_KEY in .env")
@@ -235,7 +237,15 @@ class GeminiClient:
         for attempt in range(self.max_retries * len(MODEL_CASCADE)):
             # Pick the best model with capacity
             async with self._queue_lock:
-                model_name = self._pick_best_model()
+                if model_override and model_override in self._models:
+                    # Prefer the pinned model, but fall back if exhausted
+                    pinned = self._models[model_override]
+                    if pinned.has_capacity:
+                        model_name = model_override
+                    else:
+                        model_name = self._pick_best_model()
+                else:
+                    model_name = self._pick_best_model()
 
             if not model_name:
                 # All models exhausted — wait for the one with shortest cooldown

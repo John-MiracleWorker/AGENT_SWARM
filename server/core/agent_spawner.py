@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # Per-role limits to prevent runaway spawning
 ROLE_LIMITS = {
     "developer": 3,
+    "senior_developer": 1,  # Expensive (gemini-3-pro), max one at a time
     "reviewer": 2,
     "tester": 2,
     "dynamic": 4,  # max novel agents the orchestrator can create
@@ -28,6 +29,7 @@ ROLE_LIMITS = {
 # Map role names → agent classes
 ROLE_CLASSES = {
     "developer": DeveloperAgent,
+    "senior_developer": DeveloperAgent,  # Same class, but pinned to Pro model
     "reviewer": ReviewerAgent,
     "tester": TesterAgent,
 }
@@ -35,12 +37,14 @@ ROLE_CLASSES = {
 # Colors for spawned agent instances (cycle through these)
 SPAWN_COLORS = {
     "developer": ["#00E5FF", "#00BCD4", "#0097A7"],
+    "senior_developer": ["#FFD700"],  # Gold for senior
     "reviewer": ["#AA00FF", "#9C27B0", "#7B1FA2"],
     "tester": ["#00E676", "#4CAF50", "#388E3C"],
 }
 
 SPAWN_EMOJIS = {
     "developer": ["💻", "⌨️", "🛠️"],
+    "senior_developer": ["🏆"],  # Trophy for senior
     "reviewer": ["🔍", "🧐", "📝"],
     "tester": ["🧪", "🔬", "✅"],
 }
@@ -125,6 +129,12 @@ class AgentSpawner:
 
         # Register and start
         state.agents[agent_id] = agent
+
+        # Pin senior developers to the Pro model
+        if role == "senior_developer":
+            agent.model_override = "gemini-3-pro-preview"
+            logger.info(f"🏆 Senior developer {agent_id} pinned to gemini-3-pro-preview")
+
         await agent.start()
 
         logger.info(f"🆕 Spawned agent: {agent_id} (role={role}, reason={reason})")
