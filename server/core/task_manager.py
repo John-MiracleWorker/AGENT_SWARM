@@ -118,3 +118,20 @@ class TaskManager:
             "done": len(self.get_tasks_by_status(TaskStatus.DONE)),
             "blocked": len(self.get_tasks_by_status(TaskStatus.BLOCKED)),
         }
+
+    @property
+    def has_tasks(self) -> bool:
+        """Whether any tasks have been created."""
+        return len(self._tasks) > 0
+
+    @property
+    def all_done(self) -> bool:
+        """Check if all tasks are complete."""
+        if not self._tasks:
+            return False
+        return all(t.status == TaskStatus.DONE for t in self._tasks.values())
+
+    def clear(self):
+        """Clear all tasks for a new mission."""
+        self._tasks.clear()
+

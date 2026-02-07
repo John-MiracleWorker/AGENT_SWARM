@@ -18,6 +18,8 @@ class App {
         taskPanel.init();
         terminalPanel.init();
         folderPicker.init();
+        if (window.features) window.features.init();
+        if (window.diffPanel) window.diffPanel.init();
 
         // Connect WebSocket
         swarmWS.connect();

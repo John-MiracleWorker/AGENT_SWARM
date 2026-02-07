@@ -1,0 +1,696 @@
+/* ════════════════════════════════════════════════════════
+   FEATURES CSS — Budget, History, Memory, Checkpoints, 
+   Plugins, Workspaces, Thoughts, Debates, Diff Viewer
+   ════════════════════════════════════════════════════════ */
+
+/* ── Budget Display ──────────────────────────────── */
+.budget-display {
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    margin-left: auto;
+}
+
+.budget-inner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 20px;
+    padding: 4px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.budget-icon {
+    font-size: 14px;
+}
+
+.budget-bar-wrap {
+    width: 80px;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.budget-bar-fill {
+    height: 100%;
+    background: var(--success, #00E676);
+    border-radius: 3px;
+    transition: width 0.5s ease, background 0.5s ease;
+}
+
+.budget-text {
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: rgba(255, 255, 255, 0.7);
+    white-space: nowrap;
+}
+
+.budget-settings-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    opacity: 0.5;
+    transition: opacity 0.2s;
+    padding: 0;
+}
+
+.budget-settings-btn:hover {
+    opacity: 1;
+}
+
+/* ── Feature Buttons ─────────────────────────────── */
+.feature-buttons {
+    display: flex;
+    gap: 4px;
+    margin-left: 8px;
+    padding-left: 8px;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.feature-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    width: 32px;
+    height: 28px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.feature-btn:hover {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: scale(1.05);
+}
+
+/* ── Modal ───────────────────────────────────────── */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(4px);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.15s ease;
+}
+
+.modal-overlay.hidden {
+    display: none;
+}
+
+.modal-dialog {
+    background: var(--bg-secondary, #1a1a2e);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    width: 90%;
+    max-width: 600px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    animation: slideUp 0.2s ease;
+}
+
+@keyframes slideUp {
+    from {
+        transform: translateY(20px);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 16px;
+    color: var(--text-primary, #eee);
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 18px;
+    cursor: pointer;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    transition: all 0.2s;
+}
+
+.modal-close:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: white;
+}
+
+.modal-body {
+    padding: 16px 20px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+/* ── Loading & Empty States ──────────────────────── */
+.loading {
+    text-align: center;
+    padding: 24px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.empty-state {
+    text-align: center;
+    padding: 32px;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+.empty-state p {
+    margin-top: 8px;
+}
+
+.error {
+    color: var(--danger, #FF5252);
+    text-align: center;
+    padding: 16px;
+}
+
+/* ── History Cards ───────────────────────────────── */
+.history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.history-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.history-card:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+.history-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.history-status {
+    font-size: 14px;
+}
+
+.history-goal {
+    font-weight: 500;
+    color: var(--text-primary, #eee);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.history-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+/* ── Memory Cards ────────────────────────────────── */
+.memory-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.memory-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    padding: 12px 16px;
+}
+
+.memory-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.memory-type {
+    font-size: 10px;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(100, 100, 255, 0.15);
+    color: rgba(150, 150, 255, 0.9);
+    font-weight: 600;
+}
+
+.memory-type.error_recovery {
+    background: rgba(255, 82, 82, 0.15);
+    color: #FF5252;
+}
+
+.memory-type.pattern {
+    background: rgba(0, 230, 118, 0.15);
+    color: #00E676;
+}
+
+.memory-type.feedback {
+    background: rgba(0, 229, 255, 0.15);
+    color: #00E5FF;
+}
+
+.memory-agent {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.memory-delete {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    opacity: 0.3;
+    transition: opacity 0.2s;
+    margin-left: auto;
+}
+
+.memory-delete:hover {
+    opacity: 1;
+}
+
+.memory-lesson {
+    color: var(--text-primary, #eee);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.memory-context {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.35);
+    margin-top: 4px;
+    font-style: italic;
+}
+
+/* ── Checkpoint Cards ────────────────────────────── */
+.checkpoint-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.checkpoint-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+
+.checkpoint-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.checkpoint-trigger {
+    font-size: 10px;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255, 215, 0, 0.15);
+    color: #FFD700;
+    font-weight: 600;
+}
+
+.checkpoint-label {
+    font-size: 13px;
+    color: var(--text-primary, #eee);
+}
+
+.checkpoint-delete {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.3);
+    margin-left: auto;
+    font-size: 14px;
+}
+
+.checkpoint-delete:hover {
+    color: #FF5252;
+}
+
+.checkpoint-action {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.4);
+    margin-top: 4px;
+}
+
+.checkpoint-add {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.checkpoint-add h4 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    color: var(--text-primary, #eee);
+}
+
+.checkpoint-add input,
+.checkpoint-add select {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: white;
+    font-size: 13px;
+    margin-right: 6px;
+    margin-bottom: 6px;
+}
+
+.btn-primary {
+    background: var(--accent, #7C4DFF);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.btn-primary:hover {
+    filter: brightness(1.15);
+    transform: scale(1.02);
+}
+
+/* ── Plugin Cards ────────────────────────────────── */
+.plugin-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.plugin-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+
+.plugin-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+.plugin-name {
+    font-weight: 600;
+    color: var(--text-primary, #eee);
+    font-size: 13px;
+}
+
+.plugin-enabled {
+    font-size: 12px;
+}
+
+.plugin-desc {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.5);
+    margin-bottom: 4px;
+}
+
+.plugin-cmd code {
+    font-size: 11px;
+    color: rgba(0, 229, 255, 0.7);
+    background: rgba(0, 0, 0, 0.2);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+/* ── Workspace Cards ─────────────────────────────── */
+.workspace-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.workspace-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.workspace-card:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.workspace-card.active {
+    border-color: var(--accent, #7C4DFF);
+    background: rgba(124, 77, 255, 0.08);
+}
+
+.workspace-indicator {
+    font-size: 10px;
+}
+
+.workspace-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.workspace-name {
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--text-primary, #eee);
+}
+
+.workspace-path {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.35);
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.workspace-add {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.workspace-add input {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: white;
+    font-size: 13px;
+    flex: 1;
+    min-width: 150px;
+}
+
+/* ── Thought Bubbles (Live Reasoning) ────────────── */
+.thought-bubble {
+    border-left: 3px solid rgba(255, 215, 0, 0.3);
+    background: rgba(255, 215, 0, 0.03);
+}
+
+.thought-bubble.collapsed .thought-content {
+    max-height: 28px;
+    overflow: hidden;
+    mask-image: linear-gradient(to bottom, black 60%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent);
+}
+
+.thought-badge {
+    background: rgba(255, 215, 0, 0.15) !important;
+    color: #FFD700 !important;
+    font-size: 10px;
+}
+
+.thought-toggle {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.3);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 2px;
+    transition: transform 0.2s;
+}
+
+.thought-bubble.collapsed .thought-toggle {
+    transform: rotate(-90deg);
+}
+
+/* ── Debate Cards ────────────────────────────────── */
+.debate-card {
+    border-left: 3px solid rgba(170, 0, 255, 0.4);
+    background: rgba(170, 0, 255, 0.03);
+}
+
+.debate-badge {
+    background: rgba(170, 0, 255, 0.15) !important;
+    color: #AA00FF !important;
+    font-size: 10px;
+}
+
+.debate-thread {
+    margin: 4px 0;
+    line-height: 1.5;
+}
+
+.debate-position {
+    margin-top: 6px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.debate-target {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.35);
+    margin-top: 2px;
+}
+
+/* ── Diff Viewer ─────────────────────────────────── */
+.diff-viewer {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.diff-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.diff-refresh,
+.diff-close {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.5;
+}
+
+.diff-refresh:hover,
+.diff-close:hover {
+    opacity: 1;
+}
+
+.diff-content {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    padding: 12px;
+    margin: 0;
+    overflow: auto;
+    flex: 1;
+    tab-size: 4;
+    white-space: pre;
+}
+
+.diff-add {
+    color: #00E676;
+    background: rgba(0, 230, 118, 0.08);
+    display: inline-block;
+    width: 100%;
+}
+
+.diff-del {
+    color: #FF5252;
+    background: rgba(255, 82, 82, 0.08);
+    display: inline-block;
+    width: 100%;
+}
+
+.diff-hunk {
+    color: #00E5FF;
+    font-weight: 600;
+}
+
+.diff-meta {
+    color: rgba(255, 255, 255, 0.3);
+    font-style: italic;
+}
+
+/* ── Detail Meta ─────────────────────────────────── */
+.detail-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: 12px 0;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.task-item {
+    padding: 4px 8px;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.7);
+    border-radius: 4px;
+}
+
+.task-item.done {
+    color: var(--success, #00E676);
+}
+
+/* ── Animations ──────────────────────────────────── */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}

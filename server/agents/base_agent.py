@@ -12,13 +12,18 @@ from typing import Optional
 from enum import Enum
 
 from server.core.message_bus import MessageBus, MessageType, Message
-from server.core.gemini_client import GeminiClient
+from server.core.gemini_client import GeminiClient, BudgetExhaustedError
 from server.core.workspace import WorkspaceManager
 from server.core.task_manager import TaskManager, TaskStatus
 from server.core.terminal import TerminalExecutor
 from server.core.context_manager import ContextManager
 
 logger = logging.getLogger(__name__)
+
+# Error recovery constants
+MAX_CONSECUTIVE_ERRORS = 5
+RETRY_BACKOFF_BASE = 2
+MAX_RETRY_ATTEMPTS = 3
 
 
 class AgentStatus(str, Enum):
@@ -67,6 +72,8 @@ class BaseAgent(ABC):
         self._paused = False
         self._pending_approvals: dict[str, asyncio.Future] = {}
         self._loop_task: Optional[asyncio.Task] = None
+        self._consecutive_errors: int = 0
+        self._error_backoff: float = 1.0
 
     @property
     @abstractmethod
@@ -136,14 +143,65 @@ class BaseAgent(ABC):
                 await self._broadcast_status()
                 await self._act(action)
 
+                # Reset error counter on success
+                self._consecutive_errors = 0
+                self._error_backoff = 1.0
+
                 # Small delay to prevent tight loops
                 await asyncio.sleep(1)
 
             except asyncio.CancelledError:
                 break
+            except BudgetExhaustedError as be:
+                logger.warning(f"[{self.agent_id}] Budget exhausted: {be}")
+                await self.bus.publish(Message(
+                    sender=self.agent_id,
+                    sender_role=self.role,
+                    msg_type=MessageType.STATUS,
+                    content=f"⚠️ Budget limit reached — agent paused",
+                    target="broadcast",
+                ))
+                # Trigger mission complete on budget exhaustion
+                try:
+                    await self._trigger_mission_complete()
+                except Exception:
+                    pass
+                break
             except Exception as e:
-                logger.error(f"[{self.agent_id}] Event loop error: {e}", exc_info=True)
-                await asyncio.sleep(5)
+                self._consecutive_errors += 1
+                logger.error(
+                    f"[{self.agent_id}] Error #{self._consecutive_errors}: {e}",
+                    exc_info=True,
+                )
+
+                if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                    logger.error(f"[{self.agent_id}] Too many errors ({MAX_CONSECUTIVE_ERRORS}), auto-pausing")
+                    # Save lesson about the failure
+                    try:
+                        from server.main import state
+                        state.agent_memory.save_lesson(
+                            agent_role=self.role,
+                            lesson=f"Repeated failure: {str(e)[:200]}",
+                            context=f"Failed {MAX_CONSECUTIVE_ERRORS} times consecutively",
+                            mission_id=getattr(state, 'mission_id', ''),
+                            lesson_type="error_recovery",
+                        )
+                    except Exception:
+                        pass
+                    await self.bus.publish(Message(
+                        sender=self.agent_id,
+                        sender_role=self.role,
+                        msg_type=MessageType.STATUS,
+                        content=f"🔴 Auto-paused after {MAX_CONSECUTIVE_ERRORS} consecutive errors: {str(e)[:100]}",
+                        target="broadcast",
+                    ))
+                    self.pause()
+                else:
+                    # Exponential backoff
+                    wait = min(self._error_backoff * RETRY_BACKOFF_BASE, 30)
+                    self._error_backoff = wait
+                    logger.info(f"[{self.agent_id}] Retrying in {wait:.1f}s...")
+                    await asyncio.sleep(wait)
 
     def _should_act_without_messages(self) -> bool:
         """Override in subclass if agent should act proactively."""
@@ -220,6 +278,25 @@ class BaseAgent(ABC):
         message = action.get("message", "")
 
         try:
+            # Checkpoint gate — check action against rules before executing
+            try:
+                from server.main import state as app_state
+                checkpoint_match = app_state.checkpoints.check_action(action_type, params)
+                if checkpoint_match:
+                    if checkpoint_match["action"] == "pause":
+                        await self._request_approval(
+                            action_type, params,
+                            f"🚧 Checkpoint: {checkpoint_match['label']}. Agent wants to: {action_type}"
+                        )
+                        return
+                    elif checkpoint_match["action"] == "confirm":
+                        await self._request_approval(
+                            action_type, params,
+                            f"⚠️ Requires confirmation: {checkpoint_match['label']}"
+                        )
+                        return
+            except ImportError:
+                pass
             if action_type == "write_file":
                 path = params.get("path", "")
                 content = params.get("content", "")
@@ -295,6 +372,9 @@ class BaseAgent(ABC):
                         content=f"Task [{task_id}] updated to {status.value}",
                         data=task.to_dict(),
                     )
+                    # Check if all tasks are now complete → auto-stop
+                    if status == TaskStatus.DONE and self.tasks.all_done:
+                        await self._trigger_mission_complete()
 
             elif action_type == "request_review":
                 await self.bus.publish(
@@ -318,9 +398,44 @@ class BaseAgent(ABC):
                 await self._request_approval("delete_file", params, f"Agent wants to delete: `{path}`")
                 return
 
+            elif action_type == "use_tool":
+                # Plugin system — execute a registered tool
+                tool_name = params.get("tool", "")
+                tool_path = params.get("path", ".")
+                try:
+                    from server.main import state as app_state
+                    cmd = app_state.plugin_registry.build_command(
+                        tool_name,
+                        workspace=str(self.workspace.root),
+                        path=tool_path,
+                    )
+                    if cmd:
+                        result = await self.terminal.execute(
+                            command=cmd,
+                            cwd=str(self.workspace.root),
+                        )
+                        await self.bus.publish(
+                            sender=self.agent_id,
+                            sender_role=self.role,
+                            msg_type=MessageType.TERMINAL_OUTPUT,
+                            content=f"🔧 Tool [{tool_name}]: {cmd}",
+                            data=result.to_dict(),
+                        )
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"[Tool {tool_name} output]:\n{result.stdout[:2000]}\n{result.stderr[:500]}",
+                        })
+                    else:
+                        self._messages_history.append({
+                            "role": "user",
+                            "content": f"Unknown tool: {tool_name}. Available: {[t['name'] for t in app_state.plugin_registry.list_tools()]}",
+                        })
+                except ImportError:
+                    pass
+
             elif action_type == "done":
-                # Agent signals completion
-                pass
+                # Orchestrator signals mission complete
+                await self._trigger_mission_complete()
 
             elif action_type == "message":
                 # Just a chat message, no file action
@@ -379,6 +494,59 @@ class BaseAgent(ABC):
             "role": "user",
             "content": f"[USER DIRECTIVE]: {content}",
         })
+
+    async def _trigger_mission_complete(self):
+        """Handle mission completion — stop all agents, save history, and broadcast finish."""
+        summary = self.tasks.get_summary()
+        logger.info(f"[{self.agent_id}] 🏁 Mission complete! Tasks: {summary}")
+
+        await self.bus.publish(
+            sender=self.agent_id,
+            sender_role=self.role,
+            msg_type=MessageType.MISSION_COMPLETE,
+            content="✅ Mission complete — all tasks finished!",
+            data={"tasks": self.tasks.list_tasks(), "summary": summary},
+        )
+
+        # Auto-stop all agents and save state
+        try:
+            from server.main import state
+            import time as _time
+
+            # Save mission history
+            duration = _time.time() - state.mission_start_time if state.mission_start_time else 0
+            cost = state.gemini.get_global_usage().get("estimated_cost_usd", 0)
+            state.mission_store.save_mission(
+                mission_id=state.mission_id or "unknown",
+                goal=state.mission_goal or "",
+                workspace_path=str(self.workspace.root or ""),
+                tasks=self.tasks.list_tasks(),
+                cost_usd=cost,
+                duration_seconds=duration,
+                agents=list(state.agents.keys()),
+                status="completed",
+            )
+
+            # Save memory lessons from completed tasks
+            done_tasks = [t for t in self.tasks.list_tasks() if t.get("status") == "done"]
+            for task in done_tasks[:3]:  # Save top 3 lessons
+                state.agent_memory.save_lesson(
+                    agent_role=task.get("assignee", self.role),
+                    lesson=f"Successfully completed: {task.get('title', '')}",
+                    context=task.get("description", ""),
+                    mission_id=state.mission_id or "",
+                    lesson_type="pattern",
+                )
+
+            for agent in state.agents.values():
+                if agent.agent_id != self.agent_id:
+                    await agent.stop()
+            await state.git_manager.auto_commit("Mission complete — all tasks done")
+            state.mission_active = False
+            # Stop self last
+            self._running = False
+        except Exception as e:
+            logger.error(f"Auto-stop failed: {e}")
 
     async def _broadcast_status(self):
         """Broadcast agent status to UI."""

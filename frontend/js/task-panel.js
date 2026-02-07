@@ -1,16 +1,23 @@
 /**
- * Task Panel — Kanban board with TODO / IN_PROGRESS / IN_REVIEW / DONE columns.
+ * Task Panel — Progress-tracked task overview with auto-complete detection.
+ * Shows real-time checklist of tasks and mission completion state.
  */
 
 class TaskPanel {
     constructor() {
         this.tasks = {};
+        this.missionComplete = false;
     }
 
     init() {
         swarmWS.on('message', (msg) => {
             if (msg.type === 'task_assigned' && msg.data) {
                 this.updateTask(msg.data);
+            }
+
+            // Handle mission completion broadcast
+            if (msg.type === 'mission_complete') {
+                this._handleMissionComplete(msg.data || {});
             }
         });
     }
@@ -41,19 +48,90 @@ class TaskPanel {
             tester: '#00E676',
         }[task.assignee] || '#888';
 
+        const statusIcon = this._statusIcon(status);
+
         card.innerHTML = `
-            <div class="kanban-card-title">${this._escapeHtml(task.title)}</div>
+            <div class="kanban-card-header">
+                <span class="kanban-card-status">${statusIcon}</span>
+                <span class="kanban-card-title">${this._escapeHtml(task.title)}</span>
+            </div>
             <div class="kanban-card-meta">
-                <span style="color: ${assigneeColor}">${task.assignee || 'unassigned'}</span>
-                <span>${id}</span>
+                <span style="color: ${assigneeColor}">● ${task.assignee || 'unassigned'}</span>
+                <span class="kanban-card-id">#${id}</span>
             </div>
         `;
 
         card.title = task.description || '';
         column.appendChild(card);
 
-        // Update counts
+        // Update counts and check completion
         this._updateCounts();
+    }
+
+    _statusIcon(status) {
+        const icons = {
+            'todo': '○',
+            'in_progress': '◔',
+            'in_review': '◑',
+            'done': '●',
+            'blocked': '⊘',
+        };
+        return icons[status] || '○';
+    }
+
+    _handleMissionComplete(data) {
+        this.missionComplete = true;
+        const summary = data.summary || {};
+
+        // Update progress bar to 100%
+        const fill = document.getElementById('progress-fill');
+        const text = document.getElementById('progress-text');
+        if (fill) {
+            fill.style.width = '100%';
+            fill.style.background = 'linear-gradient(90deg, #00E676, #69F0AE)';
+        }
+        if (text) {
+            text.textContent = '✅ Complete';
+            text.style.color = '#00E676';
+        }
+
+        // Show completion banner
+        const banner = document.createElement('div');
+        banner.className = 'mission-complete-banner';
+        banner.innerHTML = `
+            <div class="mission-complete-icon">🏁</div>
+            <div class="mission-complete-text">
+                <strong>Mission Complete</strong>
+                <span>${summary.total || Object.keys(this.tasks).length} tasks finished</span>
+            </div>
+        `;
+
+        const taskBody = document.querySelector('#task-panel .panel-body');
+        if (taskBody) {
+            taskBody.prepend(banner);
+        }
+
+        // Update app state
+        if (window.app) {
+            window.app.missionActive = false;
+            if (window.app.tokenUpdateInterval) {
+                clearInterval(window.app.tokenUpdateInterval);
+            }
+        }
+
+        // Flash the stop button to green
+        const stopBtn = document.getElementById('btn-stop');
+        if (stopBtn) {
+            stopBtn.textContent = '✅ Done';
+            stopBtn.style.background = 'rgba(0, 230, 118, 0.2)';
+            stopBtn.style.color = '#00E676';
+            stopBtn.style.borderColor = '#00E676';
+        }
+
+        // Add system message
+        if (window.terminalPanel) {
+            terminalPanel.addSystemMessage('🏁 Mission complete — all tasks finished. Agents stopped.');
+        }
     }
 
     _updateCounts() {
@@ -71,8 +149,17 @@ class TaskPanel {
         const done = Object.values(this.tasks).filter(t => t.status === 'done').length;
         const fill = document.getElementById('progress-fill');
         const text = document.getElementById('progress-text');
+
         if (fill && total > 0) {
-            fill.style.width = `${(done / total) * 100}%`;
+            const pct = (done / total) * 100;
+            fill.style.width = `${pct}%`;
+
+            // Color gradient based on progress
+            if (pct >= 100) {
+                fill.style.background = 'linear-gradient(90deg, #00E676, #69F0AE)';
+            } else if (pct >= 50) {
+                fill.style.background = 'linear-gradient(90deg, var(--accent), #00E5FF)';
+            }
         }
         if (text) {
             text.textContent = `${done}/${total} tasks`;

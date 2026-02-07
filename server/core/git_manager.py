@@ -97,6 +97,32 @@ class GitManager:
             logger.error(f"Git diff failed: {e}")
             return ""
 
+    async def get_file_diff(self, file_path: str) -> str:
+        """Get diff for a specific file (uncommitted changes)."""
+        if not self._repo:
+            return ""
+        try:
+            diff = await asyncio.to_thread(
+                lambda: self._repo.git.diff("--", file_path) + "\n" + self._repo.git.diff("--staged", "--", file_path)
+            )
+            return diff.strip()
+        except Exception as e:
+            logger.error(f"Git file diff failed: {e}")
+            return ""
+
+    async def get_commit_diff(self, commit_sha: str) -> str:
+        """Get diff for a specific commit."""
+        if not self._repo:
+            return ""
+        try:
+            diff = await asyncio.to_thread(
+                lambda: self._repo.git.diff(f"{commit_sha}~1", commit_sha)
+            )
+            return diff.strip()
+        except Exception as e:
+            logger.error(f"Git commit diff failed: {e}")
+            return ""
+
     async def get_log(self, max_count: int = 10) -> list[dict]:
         """Get recent commit log."""
         if not self._repo:

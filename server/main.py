@@ -22,6 +22,10 @@ from server.core.task_manager import TaskManager
 from server.core.terminal import TerminalExecutor
 from server.core.git_manager import GitManager
 from server.core.context_manager import ContextManager
+from server.core.mission_store import MissionStore
+from server.core.checkpoints import CheckpointManager
+from server.core.agent_memory import AgentMemory
+from server.core.plugin_registry import PluginRegistry
 from server.api.routes import create_router
 from server.api.websocket import websocket_endpoint
 
@@ -52,10 +56,45 @@ class SwarmState:
         self.terminal = TerminalExecutor()
         self.git_manager = GitManager()
         self.context_manager = ContextManager()
+        self.mission_store = MissionStore()
+        self.checkpoints = CheckpointManager()
+        self.agent_memory = AgentMemory()
+        self.plugin_registry = PluginRegistry()
         self.agents: dict = {}
         self.mission_id: str | None = None
         self.mission_goal: str | None = None
         self.mission_active: bool = False
+        self.mission_start_time: float = 0
+
+        # Multi-workspace support
+        self._workspaces: dict[str, dict] = {}  # id -> {path, name, active}
+        self._active_workspace_id: str | None = None
+
+    def list_workspaces(self) -> list[dict]:
+        """List all registered workspaces."""
+        return [
+            {**ws, "id": wid, "active": wid == self._active_workspace_id}
+            for wid, ws in self._workspaces.items()
+        ]
+
+    def add_workspace(self, path: str, name: str = "") -> dict:
+        """Register a new workspace."""
+        import hashlib
+        ws_id = hashlib.md5(path.encode()).hexdigest()[:8]
+        self._workspaces[ws_id] = {
+            "path": path,
+            "name": name or os.path.basename(path),
+        }
+        if not self._active_workspace_id:
+            self._active_workspace_id = ws_id
+        return {"id": ws_id, **self._workspaces[ws_id]}
+
+    def switch_workspace(self, workspace_id: str):
+        """Switch the active workspace."""
+        if workspace_id in self._workspaces:
+            self._active_workspace_id = workspace_id
+            ws = self._workspaces[workspace_id]
+            logger.info(f"Switched to workspace: {ws['name']} ({ws['path']})")
 
 
 # Global state

@@ -2,6 +2,7 @@
 Gemini Client — Rate-limited async wrapper with intelligent model fallback.
 Automatically swaps between models when rate limits or errors are hit.
 All agents share a single request queue with configurable RPM/TPM limits.
+Includes budget cap to prevent runaway API costs.
 """
 
 import asyncio
@@ -15,6 +16,11 @@ from google import genai
 from google.genai import types
 
 logger = logging.getLogger(__name__)
+
+
+class BudgetExhaustedError(Exception):
+    """Raised when the API budget limit is reached."""
+    pass
 
 # Model cascade — ordered by preference. Falls back on rate limit / errors.
 MODEL_CASCADE = [
@@ -125,6 +131,12 @@ class GeminiClient:
         self._agent_usage: dict[str, TokenUsage] = {}
         self._current_model: str = MODEL_CASCADE[0]["name"]
 
+        # Budget cap
+        self._budget_limit_usd: float = 1.00  # Default $1 budget
+        self._budget_warning_sent: bool = False
+        self._budget_exceeded: bool = False
+        self._on_budget_event = None  # Callback for budget warnings
+
         # Initialize model states
         self._models: dict[str, ModelState] = {}
         for m in MODEL_CASCADE:
@@ -172,6 +184,9 @@ class GeminiClient:
         """
         if not self.client:
             raise RuntimeError("Gemini client not initialized — set GEMINI_API_KEY in .env")
+
+        # Budget check before making API call
+        self._check_budget(agent_id)
 
         # Build contents list from messages
         contents = []
@@ -285,4 +300,51 @@ class GeminiClient:
             },
             "active_model": self._current_model,
             "models": self.get_model_states(),
+            "budget": self.get_budget_status(),
         }
+
+    # ─── Budget Management ──────────────────────────────────────
+
+    def set_budget(self, limit_usd: float):
+        """Set the budget limit in USD. Set to 0 for unlimited."""
+        self._budget_limit_usd = limit_usd
+        self._budget_exceeded = False
+        self._budget_warning_sent = False
+        logger.info(f"Budget set to ${limit_usd:.2f}")
+
+    def get_budget_status(self) -> dict:
+        """Get current budget status."""
+        cost = self._global_usage.estimated_cost
+        limit = self._budget_limit_usd
+        pct = (cost / limit * 100) if limit > 0 else 0
+        return {
+            "limit_usd": round(limit, 2),
+            "spent_usd": round(cost, 4),
+            "remaining_usd": round(max(0, limit - cost), 4),
+            "percent_used": round(min(pct, 100), 1),
+            "exceeded": self._budget_exceeded,
+            "warning": self._budget_warning_sent,
+        }
+
+    def _check_budget(self, agent_id: str):
+        """Check budget and raise/warn if needed."""
+        if self._budget_limit_usd <= 0:
+            return  # Unlimited
+
+        cost = self._global_usage.estimated_cost
+        pct = cost / self._budget_limit_usd
+
+        if pct >= 1.0 and not self._budget_exceeded:
+            self._budget_exceeded = True
+            logger.warning(f"🚨 Budget EXCEEDED: ${cost:.4f} / ${self._budget_limit_usd:.2f}")
+            raise BudgetExhaustedError(
+                f"Budget limit of ${self._budget_limit_usd:.2f} exceeded (spent ${cost:.4f})"
+            )
+
+        if pct >= 0.8 and not self._budget_warning_sent:
+            self._budget_warning_sent = True
+            logger.warning(f"⚠️ Budget WARNING: ${cost:.4f} / ${self._budget_limit_usd:.2f} (80%)")
+
+    def set_budget_callback(self, callback):
+        """Set a callback for budget events (for broadcasting to UI)."""
+        self._on_budget_event = callback

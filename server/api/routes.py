@@ -53,6 +53,7 @@ def create_router(state) -> APIRouter:
         state.workspace.set_root(str(workspace))
         state.mission_goal = req.goal
         state.mission_active = True
+        state.mission_start_time = __import__('time').time()
 
         # Initialize git
         await state.git_manager.init_repo(str(workspace))
@@ -280,6 +281,19 @@ def create_router(state) -> APIRouter:
         """Get token usage statistics."""
         return state.gemini.get_all_usage()
 
+    # --- Budget ---
+
+    @router.get("/budget")
+    async def get_budget():
+        """Get current budget status."""
+        return state.gemini.get_budget_status()
+
+    @router.post("/budget")
+    async def set_budget(limit_usd: float = 1.0):
+        """Set budget limit in USD. Set to 0 for unlimited."""
+        state.gemini.set_budget(limit_usd)
+        return state.gemini.get_budget_status()
+
     # --- Message History ---
 
     @router.get("/messages")
@@ -287,12 +301,38 @@ def create_router(state) -> APIRouter:
         """Get recent message history."""
         return {"messages": state.message_bus.get_history(limit=limit)}
 
+    # --- Mission History ---
+
+    @router.get("/missions/history")
+    async def get_mission_history():
+        """Get past mission history."""
+        return {"missions": state.mission_store.list_missions()}
+
+    @router.get("/missions/history/{mission_id}")
+    async def get_mission_detail(mission_id: str):
+        """Get details for a specific past mission."""
+        detail = state.mission_store.get_mission(mission_id)
+        if not detail:
+            raise HTTPException(404, "Mission not found")
+        return detail
+
     # --- Git ---
 
     @router.get("/git/log")
     async def get_git_log():
         """Get git commit log."""
         return {"commits": await state.git_manager.get_log()}
+
+    @router.get("/git/diff")
+    async def get_git_diff(path: str = "", sha: str = ""):
+        """Get diff — either for a file path or a specific commit."""
+        if sha:
+            diff = await state.git_manager.get_commit_diff(sha)
+        elif path:
+            diff = await state.git_manager.get_file_diff(path)
+        else:
+            diff = await state.git_manager.get_diff()
+        return {"diff": diff}
 
     @router.post("/git/rollback")
     async def rollback_git(sha: str):
@@ -312,5 +352,63 @@ def create_router(state) -> APIRouter:
     async def get_git_status():
         """Get current git status."""
         return await state.git_manager.get_status()
+
+    # --- Checkpoints ---
+
+    @router.get("/checkpoints")
+    async def get_checkpoints():
+        """Get all checkpoint rules."""
+        return {"rules": state.checkpoints.get_rules()}
+
+    @router.post("/checkpoints")
+    async def add_checkpoint(trigger: str = "custom", pattern: str = "", action: str = "pause"):
+        """Add a checkpoint rule."""
+        rule = state.checkpoints.add_rule(trigger, pattern, action)
+        return rule
+
+    @router.delete("/checkpoints/{rule_id}")
+    async def remove_checkpoint(rule_id: str):
+        """Remove a checkpoint rule."""
+        state.checkpoints.remove_rule(rule_id)
+        return {"status": "removed"}
+
+    # --- Agent Memory ---
+
+    @router.get("/memory")
+    async def get_memories():
+        """Get all stored agent memories/lessons."""
+        return {"memories": state.agent_memory.list_memories()}
+
+    @router.delete("/memory/{memory_id}")
+    async def delete_memory(memory_id: str):
+        """Delete a specific memory."""
+        state.agent_memory.delete_memory(memory_id)
+        return {"status": "deleted"}
+
+    # --- Plugins ---
+
+    @router.get("/plugins")
+    async def get_plugins():
+        """Get all available plugins/tools."""
+        return {"plugins": state.plugin_registry.list_tools()}
+
+    # --- Workspaces ---
+
+    @router.get("/workspaces")
+    async def list_workspaces():
+        """List all registered workspaces."""
+        return {"workspaces": state.list_workspaces()}
+
+    @router.post("/workspaces")
+    async def add_workspace(path: str, name: str = ""):
+        """Add a new workspace."""
+        ws = state.add_workspace(path, name)
+        return ws
+
+    @router.post("/workspaces/{workspace_id}/activate")
+    async def activate_workspace(workspace_id: str):
+        """Switch active workspace."""
+        state.switch_workspace(workspace_id)
+        return {"status": "switched", "active": workspace_id}
 
     return router
