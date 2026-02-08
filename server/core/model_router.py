@@ -16,6 +16,7 @@ from typing import Optional
 from server.core.llm_providers import (
     GeminiProvider,
     GroqProvider,
+    OpenAIProvider,
     ModelState,
 )
 
@@ -44,6 +45,9 @@ MODELS = [
     {"name": "llama-3.3-70b-versatile",              "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-general"},
     {"name": "qwen/qwen3-32b",                       "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-reasoning"},
     {"name": "llama-3.1-8b-instant",                 "provider": "groq", "rpm": 30, "cost_in": 0.0, "cost_out": 0.0, "tier": "free-fast"},
+    # OpenAI models — used as escalation when Gemini is rate-limited
+    {"name": "gpt-5.2-codex",     "provider": "openai", "rpm": 30, "cost_in": 1.75, "cost_out": 14.00, "tier": "openai-premium"},
+    {"name": "gpt-4.1-nano",      "provider": "openai", "rpm": 30, "cost_in": 0.10, "cost_out": 0.40, "tier": "openai-fast"},
 ]
 
 # Role-based model cascade — ordered by preference per role
@@ -51,6 +55,7 @@ ROLE_CASCADES = {
     "Orchestrator": [
         "gemini-3-pro-preview",
         "gemini-2.5-pro",
+        "gpt-5.2-codex",        # OpenAI fallback for rate limits
         "qwen/qwen3-32b",
         "gemini-2.5-flash",
         "gemini-2.0-flash",
@@ -59,9 +64,11 @@ ROLE_CASCADES = {
         "openai/gpt-oss-120b",                           # Best free coding model — OpenAI-grade structured output
         "moonshotai/kimi-k2-instruct-0905",               # Strong coding, good JSON adherence
         "meta-llama/llama-4-maverick-17b-128e-instruct",  # 128 experts, smarter than Scout
+        "gpt-5.2-codex",                                # OpenAI fallback — best at code
         "gemini-2.5-flash",
         "openai/gpt-oss-20b",
         "gemini-2.0-flash",
+        "gpt-4.1-nano",                                   # Cheapest OpenAI fallback
     ],
     "Reviewer": [
         "openai/gpt-oss-120b",
@@ -83,10 +90,12 @@ ROLE_CASCADES = {
 DEFAULT_CASCADE = [
     "openai/gpt-oss-120b",
     "moonshotai/kimi-k2-instruct-0905",
+    "gpt-5.2-codex",
     "gemini-2.5-flash",
     "qwen/qwen3-32b",
     "gemini-2.0-flash",
     "openai/gpt-oss-20b",
+    "gpt-4.1-nano",
 ]
 
 # Default cost estimates (for Gemini models used in budget tracking)
@@ -130,6 +139,7 @@ class ModelRouter:
         self,
         gemini_api_key: str = "",
         groq_api_key: str = "",
+        openai_api_key: str = "",
         max_retries: int = 3,
     ):
         # Initialize providers
@@ -144,6 +154,11 @@ class ModelRouter:
         if self._groq.is_available:
             self._providers["groq"] = self._groq
             logger.info("✅ Groq provider initialized (FREE models available)")
+
+        self._openai = OpenAIProvider(openai_api_key)
+        if self._openai.is_available:
+            self._providers["openai"] = self._openai
+            logger.info("✅ OpenAI provider initialized (GPT-5.2-codex / 4.1-nano available)")
 
         if not self._providers:
             logger.error("❌ No LLM providers available! Set at least GEMINI_API_KEY.")
@@ -193,10 +208,22 @@ class ModelRouter:
         self._current_model = first_available or "none"
         logger.info(f"📡 Model router ready — {len(self._models)} models across {len(self._providers)} providers")
 
-    def _pick_best_model(self, role: str = "", agent_id: str = "") -> Optional[str]:
+    def _pick_best_model(self, role: str = "", agent_id: str = "", model_override: Optional[str] = None) -> Optional[str]:
         """Pick the best available model for the given agent role.
+        If model_override is set, try that model first.
         If the agent has hit the failure escalation threshold, override to premium."""
         cascade = list(ROLE_CASCADES.get(role, DEFAULT_CASCADE))
+
+        # MODEL OVERRIDE: If agent is pinned to a specific model, try it first
+        if model_override and model_override in self._models:
+            pinned = self._models[model_override]
+            if pinned.has_capacity:
+                if model_override != self._current_model:
+                    logger.info(f"📌 [{agent_id}] Pinned to {model_override}")
+                self._current_model = model_override
+                return model_override
+            else:
+                logger.warning(f"📌 [{agent_id}] Pinned model {model_override} exhausted, falling back to cascade")
 
         # ESCALATION: If agent has too many consecutive failures, lead with premium
         failures = self._agent_failures.get(agent_id, 0)
@@ -257,6 +284,7 @@ class ModelRouter:
         messages: list[dict],
         temperature: float = 0.7,
         role: str = "",
+        model_override: Optional[str] = None,
     ) -> dict:
         """
         Generate a response using the best available model for the agent's role.
@@ -274,7 +302,7 @@ class ModelRouter:
         for attempt in range(total_attempts):
             # Pick the best model for this role (escalation-aware)
             async with self._queue_lock:
-                model_name = self._pick_best_model(role, agent_id=agent_id)
+                model_name = self._pick_best_model(role, agent_id=agent_id, model_override=model_override)
 
             if not model_name:
                 min_wait = min(s.wait_time() for s in self._models.values())

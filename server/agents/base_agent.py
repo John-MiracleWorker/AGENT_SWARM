@@ -112,6 +112,7 @@ class BaseAgent(ABC):
         self._last_thinking_broadcast: float = 0  # throttle thought broadcasts
         self.model_override: Optional[str] = None  # Pin to specific model (e.g. senior dev)
         self._task_failures: dict[str, int] = {}  # task_id → consecutive failure count
+        self._task_last_error: dict[str, str] = {}  # task_id → last error description
 
     @property
     @abstractmethod
@@ -180,6 +181,10 @@ class BaseAgent(ABC):
                             MessageType.TASK_ASSIGNED,
                             MessageType.REVIEW_REQUEST,
                             MessageType.REVIEW_RESULT,
+                            MessageType.ASK_HELP,
+                            MessageType.SHARE_INSIGHT,
+                            MessageType.PROPOSE_APPROACH,
+                            MessageType.CHALLENGE,
                         )
                         or self.agent_id in m.mentions
                         for m in pending
@@ -216,6 +221,38 @@ class BaseAgent(ABC):
                 self.status = AgentStatus.ACTING
                 await self._broadcast_status()
                 await self._act(action)
+
+                # ─── Per-task failure tracking for self-debugging ──────
+                # Check if the action resulted in an error by scanning recent history
+                action_type = action.get("action", "")
+                active_task_id = action.get("params", {}).get("task_id", "")
+                # If no explicit task_id, find the current in-progress task
+                if not active_task_id:
+                    in_progress = [
+                        t for t in self.tasks.get_tasks_for_agent(self.agent_id)
+                        if hasattr(t, 'status') and t.status.value == "in_progress"
+                    ]
+                    if in_progress:
+                        active_task_id = in_progress[0].id
+
+                if active_task_id and self._messages_history:
+                    last_msg = self._messages_history[-1].get("content", "")
+                    error_signals = ["error", "Error", "failed", "Failed", "❌", "BLOCKED", "Cannot"]
+                    if any(sig in last_msg for sig in error_signals) and action_type in (
+                        "write_file", "edit_file", "run_command", "use_terminal"
+                    ):
+                        self._task_failures[active_task_id] = self._task_failures.get(active_task_id, 0) + 1
+                        # Store the error for introspection context
+                        self._task_last_error[active_task_id] = last_msg[:300]
+                        logger.info(
+                            f"[{self.agent_id}] Task [{active_task_id}] failure #{self._task_failures[active_task_id]}"
+                        )
+                    else:
+                        # Reset on successful action for this task
+                        if active_task_id in self._task_failures and action_type in (
+                            "write_file", "edit_file", "run_command", "use_terminal"
+                        ):
+                            self._task_failures[active_task_id] = 0
 
                 # Reset error counter on success & notify router
                 self._consecutive_errors = 0
@@ -309,6 +346,38 @@ class BaseAgent(ABC):
         if not self._messages_history:
             return None
 
+        # ─── Self-debugging introspection ─────────────────────
+        # If the agent has been failing on a task, inject a reflection prompt
+        # that forces it to reason about WHY instead of blindly retrying.
+        current_tasks = self.tasks.get_tasks_for_agent(self.agent_id)
+        for task in current_tasks:
+            tid = task.id if hasattr(task, 'id') else str(task)
+            fail_count = self._task_failures.get(tid, 0)
+            if fail_count >= 2:
+                last_err = self._task_last_error.get(tid, "unknown error")
+                reflection = (
+                    f"[System — Self-Reflection Required] ⚠️ You have failed {fail_count} times on task [{tid}]. "
+                    f"Last error: {last_err}\n\n"
+                    f"STOP and think critically before your next attempt:\n"
+                    f"1. What specific error did you hit and WHY did it occur?\n"
+                    f"2. Why did your previous approach fail fundamentally (not just syntactically)?\n"
+                    f"3. What DIFFERENT approach could work? Don't retry the same thing.\n"
+                    f"4. Would another agent's expertise help? Use `ask_help` to get input.\n"
+                    f"5. Should you `propose_approach` to get feedback before coding?\n\n"
+                    f"Think deeply. A different strategy is needed — not the same approach with small tweaks."
+                )
+                # Don't inject the same reflection multiple times
+                already_reflected = any(
+                    "Self-Reflection Required" in m.get("content", "") and tid in m.get("content", "")
+                    for m in self._messages_history[-5:]
+                )
+                if not already_reflected:
+                    self._messages_history.append({
+                        "role": "user",
+                        "content": reflection,
+                    })
+                    logger.info(f"[{self.agent_id}] Injected self-reflection for task [{tid}] (failures={fail_count})")
+
         # Trim context if needed
         trimmed = self.context.trim_messages(self._messages_history)
 
@@ -352,6 +421,16 @@ class BaseAgent(ABC):
 
         except Exception as e:
             logger.error(f"[{self.agent_id}] Think failed: {e}")
+            # Broadcast error to chat feed so it's visible in the UI
+            try:
+                await self.bus.publish(
+                    sender=self.agent_id,
+                    sender_role=self.role,
+                    msg_type=MessageType.SYSTEM,
+                    content=f"⚠️ Think error: {str(e)[:200]}",
+                )
+            except Exception:
+                pass
             return None
 
     def _check_write_permission(self, action_type: str, path: str) -> Optional[str]:
@@ -1086,6 +1165,63 @@ class BaseAgent(ABC):
             elif action_type == "message":
                 # Just a chat message, no file action
                 pass
+
+            # ─── Collaborative problem-solving actions ─────────────
+            elif action_type == "ask_help":
+                target = params.get("target", "orchestrator")
+                question = params.get("question", message or "I need help")
+                context_info = params.get("context", "")
+                help_content = f"🤔 **Help needed from @{target}**\n\n"
+                help_content += f"**Question:** {question}\n"
+                if context_info:
+                    help_content += f"**What I've tried:** {context_info}\n"
+                task_id = params.get("task_id", "")
+                if task_id:
+                    help_content += f"**Task:** [{task_id}]\n"
+                await self.bus.publish(
+                    sender=self.agent_id,
+                    sender_role=self.role,
+                    msg_type=MessageType.ASK_HELP,
+                    content=help_content,
+                    mentions=[target],
+                    data={"question": question, "context": context_info, "task_id": task_id},
+                )
+
+            elif action_type == "share_insight":
+                insight = params.get("insight", message or "")
+                files = params.get("files", [])
+                insight_content = f"💡 **Insight from {self.agent_id}:**\n{insight}"
+                if files:
+                    insight_content += f"\n**Related files:** {', '.join(files)}"
+                await self.bus.publish(
+                    sender=self.agent_id,
+                    sender_role=self.role,
+                    msg_type=MessageType.SHARE_INSIGHT,
+                    content=insight_content,
+                    data={"insight": insight, "files": files},
+                )
+
+            elif action_type == "propose_approach":
+                approach = params.get("approach", message or "")
+                alternatives = params.get("alternatives", [])
+                task_id = params.get("task_id", "")
+                approach_content = f"📐 **Approach proposal from {self.agent_id}:**\n\n"
+                approach_content += f"**Proposed:** {approach}\n"
+                if alternatives:
+                    approach_content += f"**Alternatives considered:**\n"
+                    for i, alt in enumerate(alternatives, 1):
+                        approach_content += f"  {i}. {alt}\n"
+                if task_id:
+                    approach_content += f"\n**For task:** [{task_id}]\n"
+                approach_content += f"\n@orchestrator @reviewer — feedback welcome before I start coding."
+                await self.bus.publish(
+                    sender=self.agent_id,
+                    sender_role=self.role,
+                    msg_type=MessageType.PROPOSE_APPROACH,
+                    content=approach_content,
+                    mentions=["orchestrator", "reviewer"],
+                    data={"approach": approach, "alternatives": alternatives, "task_id": task_id},
+                )
 
             else:
                 logger.warning(f"[{self.agent_id}] Unknown action: {action_type}")

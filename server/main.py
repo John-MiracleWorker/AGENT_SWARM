@@ -49,12 +49,13 @@ class SwarmState:
         api_key = os.getenv("GEMINI_API_KEY", "")
         groq_key = os.getenv("GROQ_API_KEY", "")
         self.auth_token = os.getenv("AGENT_SWARM_API_KEY", "").strip()
+        openai_key = os.getenv("OPENAI_API_KEY", "")
         if not api_key:
             logger.warning("GEMINI_API_KEY not set! Agents will fail to think.")
         if not self.auth_token:
             logger.warning("AGENT_SWARM_API_KEY not set. API and WebSocket endpoints are UNPROTECTED.")
 
-        self.gemini = ModelRouter(gemini_api_key=api_key, groq_api_key=groq_key)
+        self.gemini = ModelRouter(gemini_api_key=api_key, groq_api_key=groq_key, openai_api_key=openai_key)
         self.message_bus = MessageBus()
         self.workspace = WorkspaceManager()
         self.task_manager = TaskManager()

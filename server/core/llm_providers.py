@@ -262,3 +262,81 @@ class GroqUsage:
     def __init__(self, usage: dict):
         self.prompt_token_count = usage.get("prompt_tokens", 0)
         self.candidates_token_count = usage.get("completion_tokens", 0)
+
+
+class OpenAIProvider:
+    """OpenAI API — used as escalation when Gemini is rate-limited."""
+
+    PROVIDER_NAME = "openai"
+    BASE_URL = "https://api.openai.com/v1/chat/completions"
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self._client = httpx.AsyncClient(
+            timeout=120.0,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+        ) if api_key else None
+
+    @property
+    def is_available(self) -> bool:
+        return self._client is not None
+
+    async def generate(
+        self,
+        model_name: str,
+        system_prompt: str,
+        contents: list,
+        temperature: float = 0.7,
+        file_context=None,
+    ):
+        """Generate response via OpenAI's Chat Completions API."""
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Inject file context as a system message
+        if file_context and file_context.is_ready:
+            file_summary = file_context.get_file_summary()
+            messages.append({
+                "role": "system",
+                "content": f"Project file context:\n{file_summary}",
+            })
+
+        # Convert messages to OpenAI format
+        for msg in contents:
+            role = msg["role"]
+            if role == "model":
+                role = "assistant"
+            messages.append({"role": role, "content": msg["content"]})
+
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature,
+            "response_format": {"type": "json_object"},
+            "max_tokens": 16384,
+        }
+
+        response = await self._client.post(self.BASE_URL, json=payload)
+        response.raise_for_status()
+        data = response.json()
+
+        return OpenAIResponse(data)
+
+
+class OpenAIResponse:
+    """Wraps OpenAI API response to match the interface expected by ModelRouter."""
+
+    def __init__(self, data: dict):
+        self._data = data
+        self.text = data["choices"][0]["message"]["content"]
+        self.usage_metadata = OpenAIUsage(data.get("usage", {}))
+
+
+class OpenAIUsage:
+    """Wraps OpenAI usage data."""
+
+    def __init__(self, usage: dict):
+        self.prompt_token_count = usage.get("prompt_tokens", 0)
+        self.candidates_token_count = usage.get("completion_tokens", 0)

@@ -31,6 +31,11 @@ class MessageType(str, Enum):
     THOUGHT = "thought"
     HANDOFF = "handoff"
     MISSION_COMPLETE = "mission_complete"
+    # ─── Collaborative problem-solving ─────────────────────
+    ASK_HELP = "ask_help"                # "I need help with X" — targeted
+    SHARE_INSIGHT = "share_insight"      # "I discovered that..." — broadcast
+    PROPOSE_APPROACH = "propose_approach" # "I think we should do X because Y"
+    CHALLENGE = "challenge"              # "I disagree because..." — structured debate
 
 
 @dataclass

@@ -33,8 +33,8 @@ CAPABILITY_SETS = {
         "description": "Can write test files and execute tests",
     },
     "communicate": {
-        "actions": ["message", "suggest_task", "update_task", "request_review"],
-        "description": "Can communicate with the team and manage tasks",
+        "actions": ["message", "suggest_task", "update_task", "request_review", "ask_help", "share_insight", "propose_approach"],
+        "description": "Can communicate with the team, manage tasks, and collaborate on problem-solving",
     },
     "research": {
         "actions": ["read_file", "list_files", "use_tool", "message", "suggest_task", "update_task"],
@@ -58,6 +58,20 @@ DYNAMIC_AGENT_BASE_PROMPT = """You are a specialized agent in a multi-agent coll
 ## Your Capabilities
 {capabilities_text}
 
+### Collaborative Problem-Solving (USE THESE!)
+- **ask_help**: Ask a specific agent for technical guidance when stuck
+  - `{{"target": "orchestrator", "question": "...", "context": "what I've tried"}}`
+- **share_insight**: Share a non-obvious discovery that could help others
+  - `{{"insight": "...", "files": ["relevant/files"]}}`
+- **propose_approach**: Propose your plan and get feedback BEFORE implementing complex work
+  - `{{"approach": "...", "alternatives": ["..."], "task_id": "..."}}`
+
+## Problem-Solving Protocol
+1. **Think before acting** — understand the problem fully before writing code
+2. **When stuck**: Use `ask_help` instead of blindly retrying
+3. **For complex tasks**: Use `propose_approach` to get feedback before implementing
+4. **Share discoveries**: Use `share_insight` when you find something non-obvious
+
 ## IMPORTANT: Task Flow
 - The Orchestrator is the brain — it creates ALL tasks
 - You CANNOT create tasks directly — use `suggest_task` to propose work to the Orchestrator
@@ -67,7 +81,7 @@ DYNAMIC_AGENT_BASE_PROMPT = """You are a specialized agent in a multi-agent coll
 ## Response Format
 You MUST respond with valid JSON:
 {{
-    "thinking": "Your reasoning about the current situation",
+    "thinking": "Your DETAILED reasoning: what approach and WHY, what you considered and rejected, potential risks",
     "action": "{available_actions_str}",
     "params": {{
         // For edit_file: {{"path": "relative/path", "search": "exact text to find", "replace": "replacement text"}}
@@ -79,6 +93,9 @@ You MUST respond with valid JSON:
         // For suggest_task: {{"title": "Task title", "reason": "Why needed"}}
         // For update_task: {{"task_id": "...", "status": "in_progress|in_review|done"}}
         // For request_review: {{"files": ["path1", "path2"], "reviewers": ["reviewer"]}}
+        // For ask_help: {{"target": "agent-id", "question": "...", "context": "..."}}
+        // For share_insight: {{"insight": "...", "files": ["..."]}}
+        // For propose_approach: {{"approach": "...", "alternatives": ["..."], "task_id": "..."}}
         // For message: {{}}
     }},
     "message": "Message to the team"
